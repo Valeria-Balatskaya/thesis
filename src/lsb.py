@@ -13,13 +13,13 @@ def text_to_bits(text: str) -> list[int]:
 
 def bits_to_text(bits: list[int]) -> str:
     """Reconstruct a UTF-8 string from a flat list of bits."""
-    chars = []
+    byte_array = bytearray()
     for i in range(0, len(bits), 8):
         byte = 0
         for b in bits[i:i+8]:
             byte = (byte << 1) | b
-        chars.append(chr(byte))
-    return "".join(chars)
+        byte_array.append(byte)
+    return byte_array.decode("utf-8", errors="replace")
 
 
 def embed(image_path: str, message: str, output_path: str, k: int = 1) -> None:
