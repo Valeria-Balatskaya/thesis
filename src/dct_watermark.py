@@ -157,3 +157,48 @@ def detect(suspect_path: str, original_path: str,
         "detected"   : detected,
         "confidence" : "HIGH" if sim > threshold * 2 else ("LOW" if sim > threshold else "NONE")
     }
+
+def detect_blind(suspect_path: str, seller_id: str,
+                 n_coeffs: int = 500, threshold: float = 3.0) -> dict:
+    """
+    Blind detector: does NOT require the original image or embed metadata.
+    Only the seller_id (to regenerate the carrier) is needed.
+
+    Reference: Barni et al. 1998, Section IV. Instead of estimating
+    W* from (v* - v)/v, we correlate the suspect's top DCT coefficients
+    directly against the carrier.
+
+    Threshold is empirical here (~3.0) because normalisation differs from
+    the Cox informed detector. Tune on your own dataset.
+    """
+    susp = np.array(Image.open(suspect_path).convert("RGB"))
+    susp_Y = _get_luminance(susp)[:, :, 0].astype(np.float64)
+
+    # Same coefficient selection rule as embed(): top-n by magnitude, exclude DC
+    dct_coeffs = dctn(susp_Y, norm="ortho")
+    flat = dct_coeffs.flatten()
+    flat_abs = np.abs(flat)
+    flat_abs[0] = 0
+    top_indices = np.argsort(flat_abs)[-n_coeffs:]
+
+    # Regenerate carrier from seller ID
+    carrier = _make_carrier(seller_id, n_coeffs)
+
+    # Normalised correlation between the (unknown-to-detector) coefficients
+    # and the carrier. If watermark was embedded with this seller_id,
+    # the modified coefficients correlate positively with the carrier.
+    v_star = flat[top_indices]
+    # Normalise by the coefficient magnitudes to remove brightness scaling
+    v_normalised = v_star / (np.abs(v_star) + 1e-8)
+
+    sim = float(np.dot(carrier, v_normalised) / np.sqrt(n_coeffs))
+
+    detected = sim > threshold
+
+    return {
+        "seller_id": seller_id,
+        "similarity": round(sim, 4),
+        "threshold": threshold,
+        "detected": detected,
+        "detector": "blind_barni1998",
+    }

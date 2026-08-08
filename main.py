@@ -3,6 +3,8 @@ from src.lsb import embed, extract
 from src.metrics import compute
 import os
 
+os.makedirs("results", exist_ok=True)
+
 IMAGES  = ["baboon", "airplane", "peppers", "splash", "house"]
 MESSAGE = "SELLER_ID:0042"
 
