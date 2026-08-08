@@ -119,3 +119,10 @@ pnpm-debug.log*
 *.out
 *.synctex.gz
 *.pdf
+
+# HiDDeN training artifacts
+checkpoints/
+data/div2k/
+data/coco/
+*.pt
+*.pth
