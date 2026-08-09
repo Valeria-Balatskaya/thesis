@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Traceability — Watermarking for E-commerce</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0f1116;
+      --panel: #171a22;
+      --panel-2: #1e222c;
+      --border: #262b36;
+      --text: #e6e8ee;
+      --muted: #8a92a1;
+      --accent: #6ea8ff;
+      --accent-strong: #4a86e8;
+      --success: #4ade80;
+      --danger: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 32px 20px; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h1 { margin: 0 0 4px; font-size: 28px; }
+    .subtitle { color: var(--muted); margin-bottom: 24px; }
+
+    .tabs { display: flex; gap: 2px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+    .tab {
+      padding: 10px 18px; cursor: pointer; color: var(--muted);
+      border-bottom: 2px solid transparent; font-size: 14px; font-weight: 500;
+    }
+    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    .card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 12px; padding: 24px; margin-bottom: 16px;
+    }
+    .card h2 { margin: 0 0 4px; font-size: 18px; }
+    .card p.hint { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    input[type=text], input[type=email], input[type=file], select {
+      width: 100%; padding: 10px 12px; border-radius: 8px;
+      background: #0b0d13; border: 1px solid var(--border);
+      color: var(--text); font-size: 14px; margin-bottom: 12px;
+    }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    button {
+      background: var(--accent-strong); color: white; border: none;
+      padding: 10px 16px; border-radius: 8px; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: background .15s;
+    }
+    button:hover { background: var(--accent); }
+    button.secondary { background: var(--panel-2); border: 1px solid var(--border); }
+    button.secondary:hover { background: #2a2f3b; }
+
+    .result {
+      margin-top: 14px; padding: 12px 14px; border-radius: 8px;
+      background: #0b0d13; border: 1px solid var(--border); font-size: 13px;
+    }
+    .result.success { border-color: var(--success); }
+    .result.danger { border-color: var(--danger); }
+    .result.hidden { display: none; }
+
+    .seller-select-row { display: flex; gap: 10px; align-items: flex-end; }
+    .seller-select-row select { margin-bottom: 0; }
+
+    .catalog-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 14px; margin-top: 14px;
+    }
+    .product-card {
+      background: var(--panel-2); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden;
+    }
+    .product-card img {
+      width: 100%; aspect-ratio: 1; object-fit: cover; display: block;
+      background: #05070c;
+    }
+    .product-card .meta { padding: 10px; font-size: 13px; }
+    .product-card .title { font-weight: 600; }
+    .product-card .sku { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+    .ranking-row {
+      display: flex; justify-content: space-between; padding: 6px 0;
+      border-bottom: 1px dashed var(--border); font-size: 13px;
+    }
+    .ranking-row:last-child { border-bottom: none; }
+    .ranking-row .sim { color: var(--muted); }
+    .ranking-row.detected .sim { color: var(--success); font-weight: 600; }
+
+    a { color: var(--accent); }
+    .footer { margin-top: 40px; text-align: center; color: var(--muted); font-size: 12px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 760px) { .grid-2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Image Traceability Service</h1>
+    <p class="subtitle">
+      Bachelor's thesis prototype — watermarking &amp; steganography for e-commerce.
+      Sellers register catalogs; anyone can scan a suspect image to identify the original product.
+    </p>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="sellers">Sellers</div>
+      <div class="tab" data-tab="catalog">My Catalog</div>
+      <div class="tab" data-tab="scan">Scan Image</div>
+    </div>
+
+    <!-- SELLERS TAB -->
+    <div class="panel active" id="panel-sellers">
+      <div class="grid-2">
+        <div class="card">
+          <h2>Create a seller account</h2>
+          <p class="hint">Sellers own catalogs of watermarked products.</p>
+          <label>Email</label>
+          <input id="new-email" type="email" placeholder="shop@example.com" />
+          <label>Business name</label>
+          <input id="new-name" type="text" placeholder="Acme Electronics" />
+          <button id="create-seller-btn">Create seller</button>
+          <div id="create-result" class="result hidden"></div>
+        </div>
+        <div class="card">
+          <h2>Registered sellers</h2>
+          <p class="hint">Live from the backend database.</p>
+          <div id="sellers-table"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CATALOG TAB -->
+    <div class="panel" id="panel-catalog">
+      <div class="card">
+        <h2>Add a product</h2>
+        <p class="hint">Upload a product image. We embed an invisible DCT watermark and return the watermarked version to use on your store.</p>
+        <div class="seller-select-row">
+          <div style="flex: 1;">
+            <label>Active seller</label>
+            <select id="catalog-seller"></select>
+          </div>
+          <button class="secondary" id="refresh-catalog-btn">Refresh catalog</button>
+        </div>
+        <label>Product title</label>
+        <input id="prod-title" type="text" placeholder="Vintage leather wallet" />
+        <label>SKU (optional)</label>
+        <input id="prod-sku" type="text" placeholder="WLT-001" />
+        <label>Product image</label>
+        <input id="prod-file" type="file" accept="image/*" />
+        <button id="add-prod-btn">Add &amp; watermark</button>
+        <div id="add-prod-result" class="result hidden"></div>
+      </div>
+      <div class="card">
+        <h2>Catalog</h2>
+        <p class="hint">Watermarked products for the selected seller.</p>
+        <div id="catalog-grid" class="catalog-grid"></div>
+      </div>
+    </div>
+
+    <!-- SCAN TAB -->
+    <div class="panel" id="panel-scan">
+      <div class="card">
+        <h2>Scan a suspect image</h2>
+        <p class="hint">Upload any image (e.g. a screenshot from another site). We check it against every product across every registered seller.</p>
+        <label>Suspect image</label>
+        <input id="scan-file" type="file" accept="image/*" />
+        <button id="scan-btn">Identify</button>
+        <div id="scan-result" class="result hidden"></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      Built with FastAPI + DCT spread-spectrum watermarking (Cox et al. 1997)
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// ─── Tabs ───────────────────────────────────────────────
+document.querySelectorAll(".tab").forEach(t => {
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+    document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    $("panel-" + t.dataset.tab).classList.add("active");
+    if (t.dataset.tab === "catalog") loadCatalog();
+    if (t.dataset.tab === "sellers") refreshSellers();
+  });
+});
+
+function showResult(el, cls, html) {
+  el.className = "result " + cls;
+  el.innerHTML = html;
+}
+
+// ─── Sellers ────────────────────────────────────────────
+async function refreshSellers() {
+  const r = await fetch("/api/sellers");
+  const j = await r.json();
+  const rows = j.sellers.map(s =>
+    `<div class="ranking-row">
+       <span><strong>${s.business_name}</strong>
+         <span style="color: var(--muted);"> — ${s.email}</span></span>
+       <span class="sim">${s.product_count} product${s.product_count === 1 ? '' : 's'}</span>
+     </div>`
+  ).join("") || `<div style="color: var(--muted);">No sellers yet.</div>`;
+  $("sellers-table").innerHTML = rows;
+  // Also populate the catalog seller dropdown
+  const sel = $("catalog-seller");
+  const prevValue = sel.value;
+  sel.innerHTML = j.sellers.length
+    ? j.sellers.map(s => `<option value="${s.id}">${s.business_name} (${s.email})</option>`).join("")
+    : `<option value="">— no sellers registered yet —</option>`;
+  if (prevValue) sel.value = prevValue;
+}
+
+$("create-seller-btn").addEventListener("click", async () => {
+  const email = $("new-email").value.trim();
+  const name  = $("new-name").value.trim();
+  const el = $("create-result");
+  if (!email || !name) { showResult(el, "danger", "Both fields are required."); return; }
+  const fd = new FormData();
+  fd.append("email", email);
+  fd.append("business_name", name);
+  const r = await fetch("/api/sellers", { method: "POST", body: fd });
+  const j = await r.json();
+  if (!r.ok) { showResult(el, "danger", j.detail || "Failed."); return; }
+  showResult(el, "success", `✓ Created <strong>${j.seller.business_name}</strong> (id=${j.seller.id}).`);
+  $("new-email").value = "";
+  $("new-name").value = "";
+  refreshSellers();
+});
+
+// ─── Catalog ────────────────────────────────────────────
+async function loadCatalog() {
+  const sellerId = $("catalog-seller").value;
+  if (!sellerId) { $("catalog-grid").innerHTML = ""; return; }
+  const r = await fetch(`/api/sellers/${sellerId}/products`);
+  const j = await r.json();
+  if (!j.products || j.products.length === 0) {
+    $("catalog-grid").innerHTML = `<div style="color: var(--muted);">No products yet.</div>`;
+    return;
+  }
+  $("catalog-grid").innerHTML = j.products.map(p => {
+    const name = p.watermarked_path.split(/[\\/]/).pop();
+    return `
+      <div class="product-card">
+        <img src="/api/watermarked/${name}" alt="${p.title}" />
+        <div class="meta">
+          <div class="title">${p.title}</div>
+          <div class="sku">${p.sku || '—'} · id ${p.id}</div>
+        </div>
+      </div>`;
+  }).join("");
+}
+$("refresh-catalog-btn").addEventListener("click", loadCatalog);
+$("catalog-seller").addEventListener("change", loadCatalog);
+
+$("add-prod-btn").addEventListener("click", async () => {
+  const sellerId = $("catalog-seller").value;
+  const title = $("prod-title").value.trim();
+  const sku   = $("prod-sku").value.trim();
+  const file  = $("prod-file").files[0];
+  const el = $("add-prod-result");
+  if (!sellerId) { showResult(el, "danger", "Create a seller first."); return; }
+  if (!title || !file) { showResult(el, "danger", "Title and image are required."); return; }
+  const fd = new FormData();
+  fd.append("title", title);
+  fd.append("sku", sku);
+  fd.append("image", file);
+  showResult(el, "", "Embedding watermark…");
+  const r = await fetch(`/api/sellers/${sellerId}/products`, { method: "POST", body: fd });
+  const j = await r.json();
+  if (!r.ok) { showResult(el, "danger", j.detail || "Failed."); return; }
+  showResult(el, "success",
+    `✓ Added <strong>${j.product.title}</strong> (id=${j.product.id}). ` +
+    `<a href="${j.download_url}" download>Download watermarked image</a>`);
+  $("prod-title").value = "";
+  $("prod-sku").value = "";
+  $("prod-file").value = "";
+  loadCatalog();
+});
+
+// ─── Scan ───────────────────────────────────────────────
+$("scan-btn").addEventListener("click", async () => {
+  const file = $("scan-file").files[0];
+  const el = $("scan-result");
+  if (!file) { showResult(el, "danger", "Please choose an image."); return; }
+  const fd = new FormData();
+  fd.append("image", file);
+  showResult(el, "", "Scanning across all products…");
+  const r = await fetch("/api/scan", { method: "POST", body: fd });
+  const j = await r.json();
+  if (!r.ok) { showResult(el, "danger", j.detail || "Failed."); return; }
+  if (j.match) {
+    showResult(el, "success", `
+      <div style="font-size: 15px;">✓ Match found</div>
+      <div style="margin-top: 6px;">
+        <strong>${j.match.product_title}</strong> (product id ${j.match.product_id})
+        <br/><span style="color: var(--muted);">Seller: ${j.match.seller_name}</span>
+        <br/><span style="color: var(--muted);">Similarity: ${j.match.similarity} (threshold ${j.threshold})</span>
+      </div>
+      <div style="margin-top: 12px; font-size: 12px; color: var(--muted);">Top candidates:</div>
+      ${j.ranking.map(s => `
+        <div class="ranking-row ${s.detected ? 'detected' : ''}">
+          <span>${s.product_title} <span style="color: var(--muted);">— ${s.seller_name}</span></span>
+          <span class="sim">sim ${s.similarity}</span>
+        </div>`).join("")}
+    `);
+  } else {
+    showResult(el, "danger", `
+      <div>✗ No product matched above threshold.</div>
+      <div style="margin-top: 6px; color: var(--muted);">
+        Top candidates (all below threshold ${j.threshold}):
+      </div>
+      ${j.ranking.map(s => `
+        <div class="ranking-row">
+          <span>${s.product_title} <span style="color: var(--muted);">— ${s.seller_name}</span></span>
+          <span class="sim">sim ${s.similarity}</span>
+        </div>`).join("")}
+    `);
+  }
+});
+
+refreshSellers();
+</script>
+</body>
+</html>
