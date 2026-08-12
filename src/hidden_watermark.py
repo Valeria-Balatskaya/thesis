@@ -43,8 +43,7 @@ class Encoder(nn.Module):
         x = self.features[3](x)
         x = self.features[4](x)
         residual = torch.tanh(self.features[5](x))
-        return torch.clamp(image + 0.05 * residual, 0.0, 1.0)
-
+        return torch.clamp(image + 0.02 * residual, 0.0, 1.0)
 
 class Decoder(nn.Module):
     def __init__(self, msg_len: int = 30, channels: int = 64):

@@ -35,7 +35,7 @@ def train(
     batch_size: int = 12,
     total_steps: int = 50000,
     lr: float = 1e-3,
-    lambda_image: float = 0.7,      # image reconstruction weight
+    lambda_image: float = 3.0,      # image reconstruction weight (was 0.7, boosted for imperceptibility)
     lambda_message: float = 1.0,    # message recovery weight
     lambda_adv: float = 1e-3,       # adversary weight (small — helps imperceptibility)
     checkpoint_dir: str = "checkpoints",
