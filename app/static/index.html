@@ -302,16 +302,19 @@ $("scan-btn").addEventListener("click", async () => {
   if (j.match) {
     showResult(el, "success", `
       <div style="font-size: 15px;">✓ Match found</div>
-      <div style="margin-top: 6px;">
+            <div style="margin-top: 6px;">
         <strong>${j.match.product_title}</strong> (product id ${j.match.product_id})
         <br/><span style="color: var(--muted);">Seller: ${j.match.seller_name}</span>
-        <br/><span style="color: var(--muted);">Similarity: ${j.match.similarity} (threshold ${j.threshold})</span>
+        <br/><span style="color: var(--muted);">
+          Detected via <strong style="color: var(--accent);">${j.match.winning_detector.toUpperCase()}</strong>
+          — DCT similarity ${j.match.dct_sim.toFixed(2)}, HiDDeN BER ${j.match.hidden_ber.toFixed(3)}
+        </span>
       </div>
       <div style="margin-top: 12px; font-size: 12px; color: var(--muted);">Top candidates:</div>
-      ${j.ranking.map(s => `
+            ${j.ranking.map(s => `
         <div class="ranking-row ${s.detected ? 'detected' : ''}">
-          <span>${s.product_title} <span style="color: var(--muted);">— ${s.seller_name}</span></span>
-          <span class="sim">sim ${s.similarity}</span>
+          <span>${s.product_title || 'unknown'} <span style="color: var(--muted);">— ${s.seller_name || ''}</span></span>
+          <span class="sim">dct ${s.dct_sim.toFixed(1)} · ber ${s.hidden_ber.toFixed(2)}</span>
         </div>`).join("")}
     `);
   } else {
@@ -320,10 +323,10 @@ $("scan-btn").addEventListener("click", async () => {
       <div style="margin-top: 6px; color: var(--muted);">
         Top candidates (all below threshold ${j.threshold}):
       </div>
-      ${j.ranking.map(s => `
+           ${j.ranking.map(s => `
         <div class="ranking-row">
-          <span>${s.product_title} <span style="color: var(--muted);">— ${s.seller_name}</span></span>
-          <span class="sim">sim ${s.similarity}</span>
+          <span>${s.product_title || 'unknown'} <span style="color: var(--muted);">— ${s.seller_name || ''}</span></span>
+          <span class="sim">dct ${s.dct_sim.toFixed(1)} · ber ${s.hidden_ber.toFixed(2)}</span>
         </div>`).join("")}
     `);
   }

@@ -32,6 +32,7 @@ class EnsembleWatermarker:
 
     def embed(self, image_path: str, seller_id: str,
               dct_output: str, hidden_output: str) -> dict:
+        
         dct_meta = dct_embed(image_path, seller_id, dct_output,
                              alpha=DCT_ALPHA, n_coeffs=DCT_N_COEFFS)
         self.hidden.embed(image_path, seller_id, hidden_output)
@@ -40,8 +41,9 @@ class EnsembleWatermarker:
             "dct_output": dct_output,
             "hidden_output": hidden_output,
             "dct_meta": dct_meta,
-            "algorithm": "ensemble_v3_parallel",
+            "algorithm": "ensemble_dual_storage",
         }
+    
 
     def identify(self, suspect_path: str, candidates: list[dict]) -> dict:
         # DCT scores against every candidate

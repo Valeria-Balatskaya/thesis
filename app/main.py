@@ -114,9 +114,8 @@ async def api_scan(image: UploadFile = File(...)):
         "match":         result["match"],
         "ranking":       result["ranking"],
         "n_candidates":  result["n_candidates"],
-        "threshold":     result.get("threshold"),
+        "threshold_note": result.get("threshold_note"),
     })
-
 
 # ─── Static file serving ──────────────────────────────────────────
 
