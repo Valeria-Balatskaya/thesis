@@ -165,3 +165,61 @@ def _perspective_coeffs(src, dst):
     A = np.array(matrix, dtype=np.float64)
     B = np.array(src, dtype=np.float64).flatten()
     return np.linalg.solve(A, B).tolist()
+
+# ─── 5. Native OS screenshot simulation (aggressive) ──────────────
+
+def native_screenshot_simulation(image_path: str, output_path: str,
+                                 dpi_scale: float = 1.5,
+                                 crop_borders: int = 40,
+                                 jpeg_quality: int = 75,
+                                 noise_sigma: float = 3.0,
+                                 seed: int | None = 42) -> None:
+    """
+    Simulate a native Windows/macOS screenshot (Snipping Tool, Cmd+Shift+4).
+    This is MUCH more destructive than screenshot_simulation() because:
+      - Display DPI scaling upsamples then downsamples the pixels
+      - The snip includes surrounding UI chrome that gets cropped
+      - Screen capture goes through the OS's rendering pipeline
+      - Final PNG/JPEG save adds compression artifacts
+      - Slight color shift from monitor gamma → OS colorspace conversion
+
+    Empirically, this attack kills classical DCT watermarks entirely
+    and severely degrades neural watermarks trained without it.
+    """
+    import numpy as np
+    from PIL import Image
+    import io
+
+    rng = np.random.default_rng(seed)
+    img = Image.open(image_path).convert("RGB")
+    w, h = img.size
+
+    # 1. Simulate DPI scaling: upsample then downsample at slightly different ratios
+    up_w = int(w * dpi_scale)
+    up_h = int(h * dpi_scale)
+    upscaled = img.resize((up_w, up_h), Image.BICUBIC)
+    # OS captures at native resolution (equivalent to downsampling)
+    down = upscaled.resize((w, h), Image.LANCZOS)
+
+    # 2. Crop borders (snip rarely gets pixel-perfect edges)
+    down = down.crop((crop_borders, crop_borders,
+                      w - crop_borders, h - crop_borders))
+    # Resize back to original dimensions (many pipelines auto-fit)
+    down = down.resize((w, h), Image.BICUBIC)
+
+    # 3. Slight color shift (monitor → sRGB conversion)
+    arr = np.array(down, dtype=np.float32)
+    arr[:, :, 0] *= 1.02  # +2% red
+    arr[:, :, 2] *= 0.98  # -2% blue
+    arr = np.clip(arr, 0, 255)
+
+    # 4. Add noise (screen rasterization + capture)
+    noise = rng.normal(0, noise_sigma, arr.shape)
+    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
+
+    # 5. JPEG round-trip (Windows saves to clipboard as JPEG-ish)
+    noisy = Image.fromarray(arr, "RGB")
+    buf = io.BytesIO()
+    noisy.save(buf, format="JPEG", quality=jpeg_quality)
+    buf.seek(0)
+    Image.open(buf).convert("RGB").save(output_path, format="PNG")

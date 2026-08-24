@@ -39,6 +39,9 @@ ATTACK_SUITE = [
     ("instagram_filter",   ea.instagram_filter,               {}),
     ("screenshot",         ea.screenshot_simulation,          {}),
     ("print_photograph",   ea.print_photograph_simulation,    {}),
+    ("screenshot",         ea.screenshot_simulation,          {}),
+    ("native_screenshot",  ea.native_screenshot_simulation,   {}),
+
 ]
 
 os.makedirs("results/ensemble_benchmark", exist_ok=True)
