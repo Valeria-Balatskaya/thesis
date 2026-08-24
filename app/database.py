@@ -48,6 +48,28 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_products_seller ON products(seller_id);
+
+        CREATE TABLE IF NOT EXISTS authorized_urls (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id   INTEGER NOT NULL,
+            url          TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_authurls_product ON authorized_urls(product_id);
+
+        CREATE TABLE IF NOT EXISTS monitoring_findings (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_id   INTEGER NOT NULL,
+            source_url   TEXT NOT NULL,
+            source_file  TEXT,
+            confidence   REAL NOT NULL,
+            detector     TEXT NOT NULL,
+            authorized   INTEGER NOT NULL,
+            found_at     TEXT NOT NULL,
+            FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+        );
     """)
     conn.commit()
     conn.close()
@@ -141,5 +163,65 @@ def list_all_products() -> list[dict]:
         JOIN sellers s ON s.id = p.seller_id
         ORDER BY p.created_at DESC
     """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+# ─── Authorized URL operations ──────────────────────────────────────
+
+def add_authorized_url(product_id: int, url: str) -> dict:
+    conn = _connect()
+    cur = conn.execute(
+        "INSERT INTO authorized_urls (product_id, url, created_at) VALUES (?, ?, ?)",
+        (product_id, url.strip(), datetime.utcnow().isoformat())
+    )
+    conn.commit()
+    row_id = cur.lastrowid
+    row = conn.execute("SELECT * FROM authorized_urls WHERE id = ?", (row_id,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def list_authorized_urls(product_id: int) -> list[dict]:
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT * FROM authorized_urls WHERE product_id = ? ORDER BY created_at",
+        (product_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_authorized_url(url_id: int) -> bool:
+    conn = _connect()
+    cur = conn.execute("DELETE FROM authorized_urls WHERE id = ?", (url_id,))
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
+
+
+# ─── Monitoring findings operations ─────────────────────────────────
+
+def record_finding(product_id: int, source_url: str, source_file: str,
+                   confidence: float, detector: str, authorized: bool) -> dict:
+    conn = _connect()
+    cur = conn.execute("""
+        INSERT INTO monitoring_findings
+        (product_id, source_url, source_file, confidence, detector, authorized, found_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (product_id, source_url, source_file, confidence, detector,
+          int(authorized), datetime.utcnow().isoformat()))
+    conn.commit()
+    row_id = cur.lastrowid
+    conn.close()
+    return {"id": row_id}
+
+
+def list_findings_for_product(product_id: int) -> list[dict]:
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT * FROM monitoring_findings WHERE product_id = ? ORDER BY found_at DESC",
+        (product_id,)
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]

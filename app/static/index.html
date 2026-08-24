@@ -16,6 +16,7 @@
       --accent-strong: #4a86e8;
       --success: #4ade80;
       --danger: #f87171;
+      --warning: #fbbf24;
     }
     * { box-sizing: border-box; }
     body {
@@ -58,6 +59,8 @@
     button:hover { background: var(--accent); }
     button.secondary { background: var(--panel-2); border: 1px solid var(--border); }
     button.secondary:hover { background: #2a2f3b; }
+    button.danger { background: #331a1a; color: var(--danger); border: 1px solid #4d2626; padding: 4px 10px; font-size: 12px; }
+    button.danger:hover { background: #4d2626; }
 
     .result {
       margin-top: 14px; padding: 12px 14px; border-radius: 8px;
@@ -65,6 +68,7 @@
     }
     .result.success { border-color: var(--success); }
     .result.danger { border-color: var(--danger); }
+    .result.warning { border-color: var(--warning); }
     .result.hidden { display: none; }
 
     .seller-select-row { display: flex; gap: 10px; align-items: flex-end; }
@@ -94,6 +98,24 @@
     .ranking-row .sim { color: var(--muted); }
     .ranking-row.detected .sim { color: var(--success); font-weight: 600; }
 
+    .url-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 12px; margin-bottom: 6px;
+      background: var(--panel-2); border: 1px solid var(--border);
+      border-radius: 6px; font-size: 13px;
+    }
+    .url-row .url-text { flex: 1; word-break: break-all; }
+    .url-row .url-text a { color: var(--accent); text-decoration: none; }
+    .url-row .url-text a:hover { text-decoration: underline; }
+
+    .finding-row {
+      padding: 12px; margin-bottom: 8px;
+      border-left: 3px solid var(--border); border-radius: 4px;
+      background: var(--panel-2); font-size: 13px;
+    }
+    .finding-row.authorized { border-left-color: var(--success); }
+    .finding-row.unauthorized { border-left-color: var(--danger); }
+
     a { color: var(--accent); }
     .footer { margin-top: 40px; text-align: center; color: var(--muted); font-size: 12px; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -112,6 +134,7 @@
       <div class="tab active" data-tab="sellers">Sellers</div>
       <div class="tab" data-tab="catalog">My Catalog</div>
       <div class="tab" data-tab="scan">Scan Image</div>
+      <div class="tab" data-tab="monitor">Monitor</div>
     </div>
 
     <!-- SELLERS TAB -->
@@ -139,7 +162,7 @@
     <div class="panel" id="panel-catalog">
       <div class="card">
         <h2>Add a product</h2>
-        <p class="hint">Upload a product image. We embed an invisible DCT watermark and return the watermarked version to use on your store.</p>
+        <p class="hint">Upload a product image. We embed an invisible ensemble watermark (DCT + HiDDeN) and return the watermarked version to use on your store.</p>
         <div class="seller-select-row">
           <div style="flex: 1;">
             <label>Active seller</label>
@@ -167,7 +190,10 @@
     <div class="panel" id="panel-scan">
       <div class="card">
         <h2>Scan a suspect image</h2>
-        <p class="hint">Upload any image (e.g. a screenshot from another site). We check it against every product across every registered seller.</p>
+        <p class="hint">
+          Upload any image (e.g. a screenshot from another site). We check it against every product across every registered seller.
+          <br/><span style="color: var(--warning);">Note: native OS screenshots (Windows Snipping Tool, macOS Cmd+Shift+4) often defeat watermarks due to DPI scaling. Upload the raw file if available.</span>
+        </p>
         <label>Suspect image</label>
         <input id="scan-file" type="file" accept="image/*" />
         <button id="scan-btn">Identify</button>
@@ -175,8 +201,57 @@
       </div>
     </div>
 
+    <!-- MONITOR TAB -->
+    <div class="panel" id="panel-monitor">
+      <div class="card">
+        <h2>Product monitoring</h2>
+        <p class="hint">
+          Select one of your registered products, then define the URLs where it's <strong>supposed</strong> to appear
+          (your own store, your Etsy listing, etc). Any match found at an unlisted URL will be flagged as
+          <strong style="color: var(--danger);">unauthorized</strong> — likely stolen.
+        </p>
+        <label>Select product</label>
+        <select id="monitor-product"></select>
+      </div>
+
+      <div class="card">
+        <h2>Authorized locations</h2>
+        <p class="hint">URLs where this product is legitimately hosted.</p>
+        <div style="display: flex; gap: 8px; align-items: flex-end;">
+          <div style="flex: 1;">
+            <label>Add a URL</label>
+            <input id="new-auth-url" type="text" placeholder="https://myshop.com/products/wallet-blue" />
+          </div>
+          <button id="add-url-btn" style="margin-bottom: 12px;">Add</button>
+        </div>
+        <div id="auth-urls-list" style="margin-top: 12px;"></div>
+      </div>
+
+      <div class="card">
+        <h2>Run monitoring scan</h2>
+        <p class="hint">
+          Simulate a reverse-image-search crawler having fetched images from various URLs on the web.
+          Upload the candidate images and provide the URLs they were found at (comma-separated, in order).
+        </p>
+        <label>Suspect images (select multiple)</label>
+        <input id="monitor-files" type="file" accept="image/*" multiple />
+        <label>Source URLs (comma-separated, one per image in the same order)</label>
+        <input id="monitor-urls" type="text" placeholder="https://alibaba-copies.cn/p/123, https://myshop.com/products/wallet-blue, ..." />
+        <button id="monitor-btn">Run scan</button>
+        <div id="monitor-progress" class="result hidden"></div>
+      </div>
+
+      <div id="monitor-results"></div>
+
+      <div class="card">
+        <h2>Historical findings</h2>
+        <p class="hint">All previously-recorded findings for the selected product.</p>
+        <div id="findings-history"></div>
+      </div>
+    </div>
+
     <div class="footer">
-      Built with FastAPI + DCT spread-spectrum watermarking (Cox et al. 1997)
+      Built with FastAPI + Ensemble Watermarking (DCT spread-spectrum + HiDDeN neural)
     </div>
   </div>
 
@@ -192,6 +267,7 @@ document.querySelectorAll(".tab").forEach(t => {
     $("panel-" + t.dataset.tab).classList.add("active");
     if (t.dataset.tab === "catalog") loadCatalog();
     if (t.dataset.tab === "sellers") refreshSellers();
+    if (t.dataset.tab === "monitor") loadMonitorProducts();
   });
 });
 
@@ -212,7 +288,6 @@ async function refreshSellers() {
      </div>`
   ).join("") || `<div style="color: var(--muted);">No sellers yet.</div>`;
   $("sellers-table").innerHTML = rows;
-  // Also populate the catalog seller dropdown
   const sel = $("catalog-seller");
   const prevValue = sel.value;
   sel.innerHTML = j.sellers.length
@@ -302,7 +377,7 @@ $("scan-btn").addEventListener("click", async () => {
   if (j.match) {
     showResult(el, "success", `
       <div style="font-size: 15px;">✓ Match found</div>
-            <div style="margin-top: 6px;">
+      <div style="margin-top: 6px;">
         <strong>${j.match.product_title}</strong> (product id ${j.match.product_id})
         <br/><span style="color: var(--muted);">Seller: ${j.match.seller_name}</span>
         <br/><span style="color: var(--muted);">
@@ -311,7 +386,7 @@ $("scan-btn").addEventListener("click", async () => {
         </span>
       </div>
       <div style="margin-top: 12px; font-size: 12px; color: var(--muted);">Top candidates:</div>
-            ${j.ranking.map(s => `
+      ${j.ranking.map(s => `
         <div class="ranking-row ${s.detected ? 'detected' : ''}">
           <span>${s.product_title || 'unknown'} <span style="color: var(--muted);">— ${s.seller_name || ''}</span></span>
           <span class="sim">dct ${s.dct_sim.toFixed(1)} · ber ${s.hidden_ber.toFixed(2)}</span>
@@ -320,15 +395,197 @@ $("scan-btn").addEventListener("click", async () => {
   } else {
     showResult(el, "danger", `
       <div>✗ No product matched above threshold.</div>
-      <div style="margin-top: 6px; color: var(--muted);">
-        Top candidates (all below threshold ${j.threshold}):
-      </div>
-           ${j.ranking.map(s => `
+      <div style="margin-top: 6px; color: var(--muted);">Top candidates:</div>
+      ${j.ranking.map(s => `
         <div class="ranking-row">
           <span>${s.product_title || 'unknown'} <span style="color: var(--muted);">— ${s.seller_name || ''}</span></span>
           <span class="sim">dct ${s.dct_sim.toFixed(1)} · ber ${s.hidden_ber.toFixed(2)}</span>
         </div>`).join("")}
     `);
+  }
+});
+
+// ─── Monitor ────────────────────────────────────────────
+
+async function loadMonitorProducts() {
+  // Populate product dropdown with ALL products across ALL sellers
+  const sellersRes = await fetch("/api/sellers");
+  const sellers = (await sellersRes.json()).sellers;
+  const options = [];
+  for (const s of sellers) {
+    const r = await fetch(`/api/sellers/${s.id}/products`);
+    const j = await r.json();
+    for (const p of j.products) {
+      options.push(`<option value="${p.id}">${p.title} (id ${p.id}) — ${s.business_name}</option>`);
+    }
+  }
+  const sel = $("monitor-product");
+  const prev = sel.value;
+  sel.innerHTML = options.length
+    ? options.join("")
+    : `<option value="">— no products registered yet —</option>`;
+  if (prev) sel.value = prev;
+  if (sel.value) {
+    loadAuthorizedUrls();
+    loadFindingsHistory();
+  }
+}
+
+$("monitor-product").addEventListener("change", () => {
+  loadAuthorizedUrls();
+  loadFindingsHistory();
+});
+
+async function loadAuthorizedUrls() {
+  const pid = $("monitor-product").value;
+  if (!pid) { $("auth-urls-list").innerHTML = ""; return; }
+  const r = await fetch(`/api/products/${pid}/urls`);
+  const j = await r.json();
+  if (!j.urls || j.urls.length === 0) {
+    $("auth-urls-list").innerHTML = `<div style="color: var(--muted); font-size: 13px;">
+      No authorized URLs yet. Add one to enable authorized/unauthorized classification.
+    </div>`;
+    return;
+  }
+  $("auth-urls-list").innerHTML = j.urls.map(u => `
+    <div class="url-row">
+      <span class="url-text"><a href="${u.url}" target="_blank" rel="noopener">${u.url}</a></span>
+      <button class="danger" onclick="deleteAuthUrl(${u.id})">Remove</button>
+    </div>
+  `).join("");
+}
+
+async function deleteAuthUrl(urlId) {
+  await fetch(`/api/products/urls/${urlId}`, { method: "DELETE" });
+  loadAuthorizedUrls();
+}
+
+$("add-url-btn").addEventListener("click", async () => {
+  const pid = $("monitor-product").value;
+  const url = $("new-auth-url").value.trim();
+  if (!pid) { alert("Select a product first."); return; }
+  if (!url) { alert("URL cannot be empty."); return; }
+  const fd = new FormData();
+  fd.append("url", url);
+  const r = await fetch(`/api/products/${pid}/urls`, { method: "POST", body: fd });
+  if (r.ok) {
+    $("new-auth-url").value = "";
+    loadAuthorizedUrls();
+  }
+});
+
+async function loadFindingsHistory() {
+  const pid = $("monitor-product").value;
+  if (!pid) { $("findings-history").innerHTML = ""; return; }
+  const r = await fetch(`/api/products/${pid}/findings`);
+  const j = await r.json();
+  if (!j.findings || j.findings.length === 0) {
+    $("findings-history").innerHTML = `<div style="color: var(--muted); font-size: 13px;">No findings recorded yet.</div>`;
+    return;
+  }
+  $("findings-history").innerHTML = j.findings.map(f => `
+    <div class="finding-row ${f.authorized ? 'authorized' : 'unauthorized'}">
+      <div>
+        <strong style="color: ${f.authorized ? 'var(--success)' : 'var(--danger)'};">
+          ${f.authorized ? '✓ Authorized' : '⚠ UNAUTHORIZED'}
+        </strong>
+        · <span style="color: var(--muted);">${f.found_at.slice(0, 19).replace('T', ' ')} UTC</span>
+      </div>
+      <div style="margin-top: 4px;">Found at: <a href="${f.source_url}" target="_blank" rel="noopener">${f.source_url}</a></div>
+      <div style="color: var(--muted); font-size: 12px; margin-top: 2px;">
+        File: ${f.source_file || '—'} · via ${f.detector} · conf ${f.confidence.toFixed(2)}
+      </div>
+    </div>
+  `).join("");
+}
+
+$("monitor-btn").addEventListener("click", async () => {
+  const files = $("monitor-files").files;
+  const urls  = $("monitor-urls").value;
+  const progress = $("monitor-progress");
+  const results  = $("monitor-results");
+  results.innerHTML = "";
+
+  if (!files || files.length === 0) {
+    progress.className = "result show danger";
+    progress.textContent = "Please select at least one image to scan.";
+    return;
+  }
+
+  progress.className = "result show";
+  progress.textContent = `Scanning ${files.length} image${files.length === 1 ? "" : "s"}... (~${(files.length * 0.5).toFixed(0)}s)`;
+
+  const fd = new FormData();
+  for (const f of files) fd.append("images", f);
+  if (urls.trim()) fd.append("source_urls", urls);
+
+  try {
+    const r = await fetch("/api/monitor/scan", { method: "POST", body: fd });
+    const j = await r.json();
+    if (!r.ok) {
+      progress.className = "result show danger";
+      progress.textContent = j.detail || "Scan failed.";
+      return;
+    }
+    progress.className = "result show success";
+    progress.innerHTML = `
+      <strong>Scan complete.</strong>
+      Checked ${j.scanned} images.
+      Found ${j.authorized.length} authorized match${j.authorized.length === 1 ? '' : 'es'},
+      <strong style="color: var(--danger);">${j.unauthorized.length} UNAUTHORIZED</strong>.
+    `;
+
+    let html = "";
+    if (j.unauthorized.length > 0) {
+      html += `
+        <div class="card" style="border-color: var(--danger);">
+          <h2 style="color: var(--danger);">⚠ Unauthorized matches — likely stolen</h2>
+          <p class="hint">These images were found at URLs NOT on your authorized list.</p>
+          ${j.unauthorized.map(f => `
+            <div class="finding-row unauthorized">
+              <div><strong>${f.match.product_title}</strong> found at:
+                <a href="${f.source_url}" target="_blank" rel="noopener">${f.source_url}</a>
+              </div>
+              <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">
+                File: ${f.source_file} · detected via ${f.match.winning_detector}
+                · DCT sim ${f.match.dct_sim.toFixed(1)} · HiDDeN BER ${f.match.hidden_ber.toFixed(2)}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+    if (j.authorized.length > 0) {
+      html += `
+        <div class="card" style="border-color: var(--success);">
+          <h2 style="color: var(--success);">✓ Authorized matches</h2>
+          <p class="hint">Images found at URLs on your authorized list — expected.</p>
+          ${j.authorized.map(f => `
+            <div class="finding-row authorized">
+              <div><strong>${f.match.product_title}</strong> found at:
+                <a href="${f.source_url}" target="_blank" rel="noopener">${f.source_url}</a>
+              </div>
+              <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">
+                File: ${f.source_file} · detected via ${f.match.winning_detector}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+    if (j.matches_found === 0) {
+      html = `
+        <div class="card" style="border-color: var(--muted);">
+          No matches. None of the scanned images appear to be watermarked
+          versions of your registered products.
+        </div>
+      `;
+    }
+    results.innerHTML = html;
+    loadFindingsHistory();
+  } catch (e) {
+    progress.className = "result show danger";
+    progress.textContent = "Network error: " + e.message;
   }
 });
 
