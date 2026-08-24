@@ -1,133 +1,116 @@
 # src/ensemble.py
-# Ensemble watermarking: embed both DCT and HiDDeN into the same image.
-# At detection time, run both decoders and use whichever gives higher confidence.
-# This covers each method's weaknesses:
-#   DCT survives JPEG, noise, mild resize — but dies on brightness/crop
-#   HiDDeN survives brightness/crop/filters — but is quality-lossy and scale-limited
-# Together they cover the union of attack classes.
+# Ensemble watermarking v3 — parallel independent watermarks with OR-detection.
+#
+# Design (clean version):
+#   Embedding: DCT and HiDDeN are embedded INDEPENDENTLY into two SEPARATE
+#              output files. The seller keeps both. When distributing product
+#              images they use the DCT version (better quality) as the primary,
+#              and keep the HiDDeN version as a fallback for post-attack scans.
+#
+#   Detection: Given a suspect image, we DON'T know which watermarked version
+#              it originated from. So we run BOTH detectors. Whichever fires
+#              with higher confidence wins. This works because DCT and HiDDeN
+#              are trained on different domains — one usually survives when
+#              the other doesn't.
+#
+# This is architecturally cleaner than trying to stack watermarks in one file.
 
 from pathlib import Path
 
-import numpy as np
-from PIL import Image
-
 from src.dct_watermark import embed as dct_embed, detect as dct_detect
-from src.hidden_inference import HiddenModel, _seller_to_bits, _ber
+from src.hidden_inference import HiddenModel
 
 DCT_ALPHA = 0.02
 DCT_N_COEFFS = 500
 DCT_THRESHOLD = 6.0
 
-# HiDDeN identification confidence threshold: we consider a HiDDeN match
-# "confident" only when BER is below this value. Empirically HiDDeN achieves
-# ~0.15-0.35 BER on our tests; random baseline is 0.5. We use 0.40 as a
-# conservative "did the watermark survive at all" gate.
-HIDDEN_CONFIDENT_BER = 0.40
+# HiDDeN "detected" gate: BER below this = we consider the watermark present
+HIDDEN_DETECTED_BER = 0.40
 
 
 class EnsembleWatermarker:
     """
-    Embed both DCT and HiDDeN watermarks; identify via best-surviving detector.
-
-    Design:
-      - embed(): DCT first, then HiDDeN on top of the DCT-watermarked image.
-        Order matters: DCT is applied to luminance top-N DCT coefficients,
-        HiDDeN adds a pixel-space residual. HiDDeN's changes could disturb
-        DCT coefficients, so we let HiDDeN "see" the DCT signal and adapt.
-      - identify(): runs BOTH detectors against every registered seller.
-        Returns the identification with higher confidence.
+    Parallel-embedding ensemble: produces two watermarked versions per image.
+    Identification runs both detectors and returns the more confident match.
     """
 
     def __init__(self, hidden_checkpoint: str):
         self.hidden = HiddenModel(hidden_checkpoint)
 
     def embed(self, image_path: str, seller_id: str,
-              output_path: str,
-              tmp_dir: str = "app/watermarked") -> dict:
-        Path(tmp_dir).mkdir(parents=True, exist_ok=True)
-        tmp_dct = f"{tmp_dir}/_tmp_dct_{abs(hash(seller_id)) % 10**8}.png"
-
-        # Step 1: DCT embedding
-        dct_meta = dct_embed(image_path, seller_id, tmp_dct,
+              dct_output: str, hidden_output: str) -> dict:
+        """
+        Produces TWO watermarked outputs. Both encode the same seller_id.
+        Seller distributes whichever suits their use case (or both).
+        """
+        dct_meta = dct_embed(image_path, seller_id, dct_output,
                              alpha=DCT_ALPHA, n_coeffs=DCT_N_COEFFS)
-
-        # Step 2: HiDDeN embedding on top of DCT-watermarked image
-        self.hidden.embed(tmp_dct, seller_id, output_path)
-
-        # Clean up intermediate
-        try:
-            Path(tmp_dct).unlink()
-        except FileNotFoundError:
-            pass
-
+        self.hidden.embed(image_path, seller_id, hidden_output)
         return {
             "seller_id": seller_id,
+            "dct_output": dct_output,
+            "hidden_output": hidden_output,
             "dct_meta": dct_meta,
-            "algorithm": "ensemble_dct+hidden",
+            "algorithm": "ensemble_v3_parallel",
         }
 
-    def identify(self, suspect_path: str,
-                 candidates: list[dict]) -> dict:
+    def identify(self, suspect_path: str, candidates: list[dict]) -> dict:
         """
-        candidates: list of dicts with keys:
-            seller_id       (str)
-            original_path   (str)  — needed for DCT informed detector
-            dct_meta        (dict) — from embed()
-        Returns best identification across both detectors.
-        """
-        results = []
-        for c in candidates:
-            # DCT detection
-            dct_result = dct_detect(
-                suspect_path,
-                c["original_path"],
-                c["seller_id"],
-                c["dct_meta"],
-                threshold=DCT_THRESHOLD,
-            )
-            dct_confidence = max(0.0, dct_result["similarity"] / DCT_THRESHOLD)
-            #   Interpretation: >1.0 means detection fires; higher = more confident
+        candidates: [{seller_id, original_path, dct_meta}, ...]
 
-            results.append({
-                "seller_id":    c["seller_id"],
-                "dct_sim":      dct_result["similarity"],
-                "dct_detected": dct_result["detected"],
-                "dct_confidence": dct_confidence,
+        Strategy: for each candidate seller, compute BOTH a DCT confidence and
+        a HiDDeN confidence, in normalized [0, 1] units. Take the MAX per
+        candidate. Rank by max confidence. Winner is top if its winning
+        detector actually fired above threshold.
+        """
+        # DCT scores against every candidate
+        dct_scores = {}
+        for c in candidates:
+            r = dct_detect(suspect_path, c["original_path"],
+                           c["seller_id"], c["dct_meta"],
+                           threshold=DCT_THRESHOLD)
+            dct_scores[c["seller_id"]] = r  # {similarity, detected, ...}
+
+        # HiDDeN scores (one pass)
+        seller_ids = [c["seller_id"] for c in candidates]
+        h_result = self.hidden.identify(suspect_path, seller_ids)
+        h_ber = {r["seller_id"]: r["ber"] for r in h_result["ranking"]}
+
+        # Fuse per candidate: max of (dct_conf, hidden_conf)
+        rows = []
+        for c in candidates:
+            sid = c["seller_id"]
+            dct_r = dct_scores[sid]
+            dct_conf = dct_r["similarity"] / DCT_THRESHOLD   # >1.0 means detected
+            h_b = h_ber.get(sid, 0.5)
+            h_conf = max(0.0, (0.5 - h_b) / 0.5)  # BER 0 → 1.0, BER 0.5 → 0
+
+            if dct_conf >= h_conf:
+                winner = "dct"
+                confidence = dct_conf
+                detected = dct_r["detected"]
+            else:
+                winner = "hidden"
+                confidence = h_conf
+                detected = h_b < HIDDEN_DETECTED_BER
+
+            rows.append({
+                "seller_id":  sid,
+                "dct_sim":    dct_r["similarity"],
+                "dct_detected": dct_r["detected"],
+                "hidden_ber": h_b,
+                "hidden_detected": h_b < HIDDEN_DETECTED_BER,
+                "winning_detector": winner,
+                "confidence": confidence,
+                "detected": detected,
             })
 
-        # HiDDeN identification (single pass across all candidates)
-        seller_ids = [c["seller_id"] for c in candidates]
-        hidden_result = self.hidden.identify(suspect_path, seller_ids)
-        # Build lookup: seller_id -> ber
-        hidden_by_seller = {r["seller_id"]: r["ber"]
-                            for r in hidden_result["ranking"]}
-        for r in results:
-            ber = hidden_by_seller.get(r["seller_id"], 0.5)
-            r["hidden_ber"] = ber
-            r["hidden_detected"] = ber < HIDDEN_CONFIDENT_BER
-            #   HiDDeN "confidence": lower BER = higher confidence, normalized
-            #   so BER=0 → confidence 1.0, BER=0.5 (random) → confidence 0
-            r["hidden_confidence"] = max(0.0, 1.0 - 2 * ber)
-
-        # ── Fusion: pick the best signal per candidate ──
-        for r in results:
-            r["ensemble_confidence"] = max(r["dct_confidence"],
-                                           r["hidden_confidence"])
-            r["detected"] = r["dct_detected"] or r["hidden_detected"]
-            # Which detector "voted" for this match?
-            if r["dct_confidence"] >= r["hidden_confidence"]:
-                r["winning_detector"] = "dct"
-            else:
-                r["winning_detector"] = "hidden"
-
-        # Rank by ensemble confidence (higher = more likely this seller)
-        results.sort(key=lambda x: x["ensemble_confidence"], reverse=True)
-
-        top = results[0]
+        rows.sort(key=lambda r: r["confidence"], reverse=True)
+        top = rows[0]
         match = top if top["detected"] else None
 
         return {
             "match": match,
-            "ranking": results[:10],
+            "ranking": rows[:10],
             "n_candidates": len(candidates),
         }

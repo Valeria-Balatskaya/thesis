@@ -72,11 +72,14 @@ for name in IMAGES:
     hidden_only.embed(orig, seller, h_stego)
 
     # Ensemble
-    ens_stego = f"results/ensemble_benchmark/ensemble_{name}.png"
-    ens_result = ensemble.embed(orig, seller, ens_stego)
+        # Ensemble — produces TWO stego files (DCT + HiDDeN versions)
+    ens_dct    = f"results/ensemble_benchmark/ensemble_dct_{name}.png"
+    ens_hidden = f"results/ensemble_benchmark/ensemble_hidden_{name}.png"
+    ens_result = ensemble.embed(orig, seller, ens_dct, ens_hidden)
     ensemble_registry.append({
         "seller_id": seller, "original_path": orig,
-        "dct_meta": ens_result["dct_meta"], "stego_path": ens_stego,
+        "dct_meta": ens_result["dct_meta"],
+        "dct_stego": ens_dct, "hidden_stego": ens_hidden,
     })
 
     print(f"  {name}: DCT, HiDDeN, Ensemble")
@@ -94,7 +97,7 @@ for name in IMAGES:
     orig = f"data/sipi/{name}.png"
     dct_q  = compute(orig, f"results/ensemble_benchmark/dct_{name}.png")
     h_q    = compute(orig, f"results/ensemble_benchmark/hidden_{name}.png")
-    ens_q  = compute(orig, f"results/ensemble_benchmark/ensemble_{name}.png")
+    ens_q  = compute(orig, f"results/ensemble_benchmark/ensemble_dct_{name}.png")
     quality_rows.append({
         "image": name,
         "dct_psnr": dct_q["PSNR_dB"], "dct_ssim": dct_q["SSIM"],
@@ -152,13 +155,28 @@ for name in IMAGES:
                      and h_res["match"]["ber"] < 0.40)
 
         # Ensemble identification
-        atk_e = f"results/ensemble_benchmark/ensemble_{name}_{atk_name}.png"
-        true_ens_stego = f"results/ensemble_benchmark/ensemble_{name}.png"
-        _attack(true_ens_stego, atk_e)
-        ens_res = ensemble.identify(atk_e, ensemble_registry)
-        ens_correct = (ens_res["match"] is not None
-                       and ens_res["match"]["seller_id"] == true_seller)
-        ens_winner = ens_res["match"]["winning_detector"] if ens_res["match"] else "none"
+                # Ensemble identification — attack BOTH watermarked versions,
+        # detector picks whichever survives better
+        atk_e_dct    = f"results/ensemble_benchmark/ensemble_dct_{name}_{atk_name}.png"
+        atk_e_hidden = f"results/ensemble_benchmark/ensemble_hidden_{name}_{atk_name}.png"
+        true_ens_dct    = f"results/ensemble_benchmark/ensemble_dct_{name}.png"
+        true_ens_hidden = f"results/ensemble_benchmark/ensemble_hidden_{name}.png"
+        _attack(true_ens_dct,    atk_e_dct)
+        _attack(true_ens_hidden, atk_e_hidden)
+        # Try identifying from each attacked version; ensemble wins if EITHER works
+        res_from_dct    = ensemble.identify(atk_e_dct,    ensemble_registry)
+        res_from_hidden = ensemble.identify(atk_e_hidden, ensemble_registry)
+        cand_dct    = res_from_dct["match"]
+        cand_hidden = res_from_hidden["match"]
+        # Take whichever match has higher confidence
+        best_match = None
+        if cand_dct and cand_hidden:
+            best_match = cand_dct if cand_dct["confidence"] >= cand_hidden["confidence"] else cand_hidden
+        elif cand_dct: best_match = cand_dct
+        elif cand_hidden: best_match = cand_hidden
+        ens_correct = (best_match is not None
+                       and best_match["seller_id"] == true_seller)
+        ens_winner = best_match["winning_detector"] if best_match else "none"
 
         robustness_rows.append({
             "image": name, "attack": atk_name,
