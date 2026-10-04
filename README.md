@@ -29,5 +29,14 @@ uvicorn app.main:app --reload
 python -m pytest tests/
 ```
 
-The trained HiDDeN checkpoint (`checkpoints/hidden_final.pt`) is git-ignored and
-must be copied over manually (or retrained via `src/training/train.py`).
+The benchmarks are standalone scripts: `python tests/test_deployed_benchmark.py`.
+
+## Model checkpoints
+
+Checkpoints are git-ignored and must be copied into `checkpoints/` manually;
+without them the benchmarks and the web app stop with `FileNotFoundError`.
+
+- `checkpoints/hidden_final.pt` — HiDDeN v1 (used by the current app and benchmarks)
+- `checkpoints/hidden_v2_best.pt` — HiDDeN v2. Train it with
+  `notebooks/train_hidden_v2.ipynb` in Google Colab, then evaluate it with
+  `python tests/test_hidden_v2_eval.py`
