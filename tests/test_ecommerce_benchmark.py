@@ -78,7 +78,7 @@ for name in IMAGES:
     lsb_embed(orig, SELLERS[name], f"results/ecommerce_benchmark/lsb_{name}.png", k=1)
     dct_embed(orig, SELLERS[name], f"results/ecommerce_benchmark/dct_{name}.png",
               alpha=DCT_ALPHA, n_coeffs=DCT_N_COEFFS)
-    hidden.embed(orig, SELLERS[name], f"results/ecommerce_benchmark/hidden_{name}.png")
+    hidden.embed(orig, SELLERS[name], f"results/ecommerce_benchmark/hidden_{name}.png", mode="legacy")
     print(f"  {name} — LSB, DCT, HiDDeN")
 
 # Pre-compute DCT metadata for identification (need to re-embed once per image)

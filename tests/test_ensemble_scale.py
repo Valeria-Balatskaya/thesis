@@ -1,4 +1,5 @@
 # tests/test_ensemble_scale.py
+# LEGACY (v3 dual storage): superseded by tests/test_deployed_benchmark.py, kept for reproducibility.
 # Realistic scale test: each distractor seller gets a UNIQUE image (not the
 # same 5 SIPI images reused). This models actual marketplace conditions where
 # every seller has different products.
@@ -84,7 +85,7 @@ for size in REGISTRY_SIZES:
 
         dct_out    = f"results/ensemble_scale/n{size}_{i}_dct.png"
         hidden_out = f"results/ensemble_scale/n{size}_{i}_hidden.png"
-        r = ensemble.embed(orig, sid, dct_out, hidden_out)
+        r = ensemble.embed_dual_storage(orig, sid, dct_out, hidden_out)
         registry.append({
             "seller_id": sid, "original_path": orig,
             "dct_meta": r["dct_meta"],

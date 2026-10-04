@@ -1,4 +1,5 @@
 # tests/test_ensemble_benchmark.py
+# LEGACY (v3 dual storage): superseded by tests/test_deployed_benchmark.py, kept for reproducibility.
 # Head-to-head: DCT alone vs HiDDeN alone vs Ensemble.
 # Runs against the full e-commerce attack suite.
 # Produces the CSV that will become the main thesis result table.
@@ -72,13 +73,13 @@ for name in IMAGES:
 
     # HiDDeN-only
     h_stego = f"results/ensemble_benchmark/hidden_{name}.png"
-    hidden_only.embed(orig, seller, h_stego)
+    hidden_only.embed(orig, seller, h_stego, mode="legacy")
 
     # Ensemble
         # Ensemble — produces TWO stego files (DCT + HiDDeN versions)
     ens_dct    = f"results/ensemble_benchmark/ensemble_dct_{name}.png"
     ens_hidden = f"results/ensemble_benchmark/ensemble_hidden_{name}.png"
-    ens_result = ensemble.embed(orig, seller, ens_dct, ens_hidden)
+    ens_result = ensemble.embed_dual_storage(orig, seller, ens_dct, ens_hidden)
     ensemble_registry.append({
         "seller_id": seller, "original_path": orig,
         "dct_meta": ens_result["dct_meta"],

@@ -66,7 +66,7 @@ for name in IMAGES:
 
     # HiDDeN
     h_out = f"results/quality_scale/hidden_{name}.png"
-    hidden.embed(orig, seller, h_out)
+    hidden.embed(orig, seller, h_out, mode="legacy")
     m = compute(orig, h_out)
     ok = m["PSNR_dB"] > 40 and m["SSIM"] > 0.98
     quality_rows.append({"image": name, "method": "HiDDeN", **m, "visually_ok": ok})

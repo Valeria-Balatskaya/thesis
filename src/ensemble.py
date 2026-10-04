@@ -1,18 +1,20 @@
 # src/ensemble.py
-# Ensemble watermarking v3 — parallel independent watermarks with confidence-max fusion.
+# Ensemble watermarking v4 — layered watermarks in ONE published image.
 #
 # Design:
-#   Embedding: DCT and HiDDeN are embedded INDEPENDENTLY into two separate
-#              output files. The DCT version is the "primary" (better quality)
-#              distributed publicly; the HiDDeN version is kept as a robust backup.
+#   Embedding: HiDDeN (residual mode) is embedded first, then DCT spread-spectrum
+#              on top of that, producing a SINGLE file that is the one published.
+#              Both watermarks therefore travel with every copy of the image.
+#              The HiDDeN-only intermediate is kept server-side as the
+#              reference image the (non-blind) DCT detector needs.
 #
-#   Detection: Run BOTH detectors against every candidate. Whichever gives
-#              higher confidence per candidate wins. Then rank candidates
-#              by their winning confidence.
+#   Detection: Run BOTH detectors against the suspect. Whichever gives higher
+#              confidence per candidate wins. Then rank candidates by their
+#              winning confidence.
 #
-# This approach delivers 91% identification accuracy across our attack suite
-# at 41 dB PSNR (matching DCT-only quality), covering every attack where
-# either method individually succeeds.
+# v3 (dual storage) embedded the two watermarks into two separate files and only
+# published the DCT one, so the HiDDeN watermark never reached a stolen copy.
+# See tests/test_deployed_benchmark.py for the honest comparison.
 
 from pathlib import Path
 
@@ -31,11 +33,32 @@ class EnsembleWatermarker:
         self.hidden = HiddenModel(hidden_checkpoint)
 
     def embed(self, image_path: str, seller_id: str,
-              dct_output: str, hidden_output: str) -> dict:
-        
+              output_path: str, reference_path: str) -> dict:
+        """
+        Layered embed: HiDDeN residual -> reference_path (server-side),
+        then DCT on top -> output_path (the one image that gets published).
+        Detection must use reference_path as the DCT "original".
+        """
+        self.hidden.embed(image_path, seller_id, reference_path, mode="residual")
+        dct_meta = dct_embed(reference_path, seller_id, output_path,
+                             alpha=DCT_ALPHA, n_coeffs=DCT_N_COEFFS)
+        return {
+            "seller_id": seller_id,
+            "output_path": output_path,
+            "reference_path": reference_path,
+            "dct_meta": dct_meta,
+            "algorithm": "ensemble_layered",
+        }
+
+    def embed_dual_storage(self, image_path: str, seller_id: str,
+                           dct_output: str, hidden_output: str) -> dict:
+        """
+        LEGACY v3 behaviour (two separate files, legacy HiDDeN mode).
+        Kept only so earlier benchmarks remain reproducible for the thesis.
+        """
         dct_meta = dct_embed(image_path, seller_id, dct_output,
                              alpha=DCT_ALPHA, n_coeffs=DCT_N_COEFFS)
-        self.hidden.embed(image_path, seller_id, hidden_output)
+        self.hidden.embed(image_path, seller_id, hidden_output, mode="legacy")
         return {
             "seller_id": seller_id,
             "dct_output": dct_output,
@@ -43,13 +66,12 @@ class EnsembleWatermarker:
             "dct_meta": dct_meta,
             "algorithm": "ensemble_dual_storage",
         }
-    
 
     def identify(self, suspect_path: str, candidates: list[dict]) -> dict:
         # DCT scores against every candidate
         dct_scores = {}
         for c in candidates:
-            r = dct_detect(suspect_path, c["original_path"],
+            r = dct_detect(suspect_path, c.get("reference_path", c["original_path"]),
                            c["seller_id"], c["dct_meta"],
                            threshold=DCT_THRESHOLD)
             dct_scores[c["seller_id"]] = r
