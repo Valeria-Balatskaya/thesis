@@ -129,3 +129,6 @@ data/coco/
 # Personal test photos (not for the repo)
 data/products/
 data/products_png/
+
+# TraceMark app runtime data
+app/data/

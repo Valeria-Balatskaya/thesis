@@ -24,7 +24,23 @@ AI edits) back to the seller/product it came from. The author develops on a Mac
   `embed_dual_storage` = legacy v3 (two files, HiDDeN copy never published)
 - `src/attacks.py`, `src/ecommerce_attacks.py` — attack suites (incl. screenshot,
   print-photograph, native screenshot simulations)
-- `app/` — FastAPI + SQLite service (sellers, products, scan, monitor, dashboard)
+- `src/defence.py` — **Retrieve-Align-Verify** pipeline (`DefencePipeline.analyse`):
+  1 blind read -> 2 SIFT+RANSAC retrieval against registered originals (also mirrored)
+  -> 3 warp suspect into the original's frame (uncovered pixels filled from the
+  UN-watermarked original) -> 4 read again; with one candidate product the bits may
+  also be matched to its known codewords (<= ~11 errors at FPR 1e-6 instead of BCH's 6).
+  Verdicts: `watermark`, `watermark_aligned`, `fingerprint_only`, `none`.
+  A product has several *copies*, each with its own watermark ID (leak tracing)
+- `src/modern_attacks.py` — off-centre crop, rotate, mirror, perspective, page
+  screenshot, phone photo of screen, messenger recompress, promo overlay, inpaint,
+  upscale; AI: `regenerate_vae` (SD VAE), `replace_background` (rembg) — optional,
+  `pip install -r requirements-ai.txt`
+- `app/` — **TraceMark** web app (FastAPI + SQLite, single-page UI in `app/static/index.html`):
+  `main.py` routes, `guard.py` service (protect / analyse / attack lab, `STRENGTH = 0.5`),
+  `store.py` DB (`app/data/tracemark.db`, git-ignored), `crawler.py` web monitor
+  (watchlist crawl + scheduler; `/demo/shop` is a generated thief page to crawl),
+  `/report/{id}` printable evidence report. `service.py`, `database.py`, `thesis.db`
+  are the legacy v1 app, kept but no longer served
 - `tests/` — standalone benchmark scripts (run with `python tests/<file>.py`, not pytest)
 - `checkpoints/hidden_final.pt` — trained v1 model, git-ignored, copy manually
   (benchmarks fail with FileNotFoundError without it)
@@ -46,16 +62,43 @@ safe at 1e-6 would need BER <= 0.17, which the v1 checkpoint (clean BER 0.19-0.4
 residual mode) cannot meet. False-positive counts vary a little between runs because
 the noise attacks are unseeded.
 
+## Retrieve-Align-Verify results (tests/test_defence_benchmark.py)
+35 registered product photos (2 copies each), 12 held out, 17 attacks, 549 attacked images.
+| Strength | PSNR | blind only | full pipeline | false watermark claims | wrong copy |
+|---|---|---|---|---|---|
+| 1.0 | 40.0 dB | 62% | 98% | 0 / 410 | 0 |
+| 0.5 (app default) | 45.8 dB | 61% | 96% | 0 / 410 | 0 |
+
+- Blind read fails completely (0%) on off-centre crop, rotation, mirror, perspective and
+  page screenshots; alignment recovers 97-100% of them.
+- Weak spots at 0.5: 50% off-centre crop (25% of the area) 43% traced (80% at 1.0);
+  AI background replacement 92% (n=12); page screenshot 97%.
+- AI VAE regeneration: 12/12 read blind at both strengths (n=12 only; full diffusion
+  img2img not tested).
+- The watermark lives entirely in colour: a luminance-only version of the residual
+  reads 0/12. At strength 1.0 a green/purple tint is visible on white backgrounds,
+  hence the 0.5 default.
+- "Same picture" check: intensity correlation let 31/60 *different photos of the same
+  product* through. Gradient correlation at 256px with threshold 0.65 -> 0/60, at the
+  cost of a few true matches falling to "none". Sibling photos reach 0.61 at most.
+- Leak tracing between two copies of one product: 74/75 correct, 0 confused.
+- Run times: ~5-10 min on CPU. Results at 1.0 predate the stricter structure check
+  (its robustness columns are unaffected; control B was 31/60 then).
+
 ## Agreed roadmap
 1. ✅ Fix architecture (single layered image) + honest benchmark with false positives
-2. **Mostly done:** HiDDeN v2 trained in Colab and evaluated (see training notes).
-   Remaining: integrate v2 into `src/ensemble.py` / `app/`, re-run the deployed benchmark
-3. Geometric alignment of suspect to original (SIFT/ORB) before DCT detection
+2. ✅ HiDDeN v2 trained in Colab, evaluated, and integrated into the app
+3. ✅ Geometric alignment (Retrieve-Align-Verify, `src/defence.py`)
 4. Compare with pretrained robust watermarks (Watermark Anything, TrustMark, StegaStamp)
-5. AI-edit attacks: SD img2img at several strengths, inpainting, background
-   removal/replacement, AI upscaling; discuss regeneration attacks (Zhao et al. 2023)
-6. Second defence layer: perceptual hash / DINOv2-CLIP fingerprinting; mention C2PA
-7. Real screenshot / phone-photo dataset instead of only simulations
+5. Partly done: AI attacks (VAE regeneration, background replacement). Still open:
+   SD img2img at several strengths, generative inpainting, neural upscaling
+6. Partly done: SIFT fingerprint as second layer. Open: global embeddings
+   (DINOv2/CLIP) + ANN index so retrieval scales beyond a few hundred products; C2PA
+7. Real screenshot / phone-photo / social-platform round-trip dataset (all attacks are
+   still simulations)
+8. Web monitor discovery: plug a reverse-image-search API (Google Vision Web Detection,
+   TinEye) into `app/crawler.py`; today it only crawls a watchlist
+9. Retrain v2 with a luminance/perceptual constraint so 40 dB is not visibly tinted
 
 ## HiDDeN v2 training notes
 - HiDDeN's plain design (spatially constant message map + pooled decoder) stalled at

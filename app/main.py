@@ -1,242 +1,408 @@
 # app/main.py
-# FastAPI entrypoint for the traceability service.
+# TraceMark — FastAPI entrypoint.
 #
-# Endpoints:
-#   POST /api/sellers                         — create a seller account
-#   GET  /api/sellers                         — list all sellers (with product counts)
-#   POST /api/sellers/{id}/products           — upload a product image (multipart)
-#   GET  /api/sellers/{id}/products           — list a seller's catalog
-#   POST /api/scan                            — identify a suspect image
-#   GET  /api/watermarked/{filename}          — serve a watermarked image
-#   GET  /api/products/{id}/urls              — list a product's authorized URLs
-#   POST /api/products/{id}/urls              — add an authorized URL to a product
-#   DELETE /api/products/urls/{url_id}        — remove an authorized URL
-#   GET  /api/products/{id}/findings          — historical monitoring findings for a product
-#   POST /api/monitor/scan                    — batch scan candidate images
-#   GET  /                                    — frontend
+#   uvicorn app.main:app --reload        then open http://127.0.0.1:8000
+#
+# Endpoints (all JSON unless noted):
+#   GET    /api/overview                    counters, model info, recent detections
+#   GET    /api/sellers        POST         seller accounts
+#   GET    /api/products       POST         list / protect a new image (multipart)
+#   GET    /api/products/{id}  DELETE       product with copies, URLs, detections
+#   POST   /api/products/{id}/copies        issue another traceable copy (per channel)
+#   POST   /api/products/{id}/urls          authorise a URL;  DELETE /api/urls/{id}
+#   GET    /api/lab/attacks                 Attack Lab catalogue
+#   POST   /api/lab/run                     attack a copy, then try to trace it
+#   POST   /api/scan                        analyse an uploaded suspect image
+#   GET    /api/watch          POST DELETE  monitor watchlist
+#   POST   /api/watch/crawl                 crawl one URL or the whole watchlist
+#   GET    /api/monitor/schedule  POST      automatic re-crawl interval
+#   GET    /api/detections     DELETE       detection log
+#   GET    /report/{id}                     printable evidence report (HTML)
+#   POST   /api/demo/build                  build the demo "thief shop"
+#   GET    /demo/shop                       demo page for the monitor to crawl
+#   GET    /media/...                       stored images
+#
+# Routes are plain `def` (FastAPI runs them in a thread pool) so the monitor can
+# crawl pages served by this same process without deadlocking.
+#
+# The previous v1 app (app/service.py, app/database.py, app/thesis.db) is kept
+# for reproducibility but is no longer served.
 
-import shutil
+import html
+import random
+import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import database as db
-from app import service
+from app import crawler, guard, store
+from src.distractor_gen import generate_distractor
+from src.payload import blind_false_positive_rate, max_errors_for_fpr, PAYLOAD_BITS, ECC_T
 
-app = FastAPI(title="Thesis Traceability Service")
-
-Path("app/uploads").mkdir(parents=True, exist_ok=True)
-Path("app/watermarked").mkdir(parents=True, exist_ok=True)
-db.init_db()
-
-
-def _save_upload(upload: UploadFile, dest_path: str) -> None:
-    with open(dest_path, "wb") as f:
-        shutil.copyfileobj(upload.file, f)
+app = FastAPI(title="TraceMark")
+store.init_db()
+crawler.start_scheduler()
 
 
-# ─── Seller endpoints ─────────────────────────────────────────────
+def _need(obj, what: str):
+    if not obj:
+        raise HTTPException(404, f"{what} not found")
+    return obj
 
-@app.post("/api/sellers")
-async def api_create_seller(
-    email: str = Form(...),
-    business_name: str = Form(...),
-):
-    email = email.strip().lower()
-    business_name = business_name.strip()
-    if not email or not business_name:
-        raise HTTPException(400, "email and business_name are required")
-    if db.get_seller_by_email(email):
-        raise HTTPException(409, f"Seller with email '{email}' already exists")
-    seller = db.create_seller(email, business_name)
-    return JSONResponse({"ok": True, "seller": seller})
 
+# ─── overview ─────────────────────────────────────────────────────
+
+@app.get("/api/overview")
+def api_overview():
+    try:
+        model = guard.model_info()
+    except FileNotFoundError as e:
+        raise HTTPException(503, str(e))
+    return {"stats": store.stats(), "model": model,
+            "recent": [guard.detection_json(d) for d in store.list_detections(limit=8)],
+            "schedule": crawler.scheduler_status()}
+
+
+# ─── sellers ──────────────────────────────────────────────────────
 
 @app.get("/api/sellers")
-async def api_list_sellers():
-    return JSONResponse({"sellers": db.list_sellers()})
+def api_sellers():
+    return {"sellers": store.list_sellers()}
 
 
-# ─── Product endpoints ────────────────────────────────────────────
+@app.post("/api/sellers")
+def api_create_seller(name: str = Form(...), email: str = Form(...)):
+    name, email = name.strip(), email.strip().lower()
+    if not name or "@" not in email:
+        raise HTTPException(400, "a name and a valid email are required")
+    if store.get_seller_by_email(email):
+        raise HTTPException(409, f"a seller with email {email} already exists")
+    return {"seller": store.create_seller(name, email)}
 
-@app.post("/api/sellers/{seller_id}/products")
-async def api_add_product(
-    seller_id: int,
-    title: str = Form(...),
-    sku: str = Form(""),
-    image: UploadFile = File(...),
-):
-    seller = db.get_seller_by_id(seller_id)
-    if not seller:
-        raise HTTPException(404, "seller not found")
-    title = title.strip()
-    if not title:
+
+# ─── products ─────────────────────────────────────────────────────
+
+@app.get("/api/products")
+def api_products():
+    out = []
+    for p in store.list_products():
+        copies = store.list_copies(p["id"])
+        out.append({**p, "original_url": guard.media_url(p["original_path"]),
+                    "thumb_url": guard.media_url(copies[0]["file_path"]) if copies else None,
+                    "copies": [{"id": c["id"], "label": c["label"]} for c in copies]})
+    return {"products": out}
+
+
+@app.post("/api/products")
+def api_protect(seller_id: int = Form(...), title: str = Form(...),
+                authorized_url: str = Form(""), image: UploadFile = File(...)):
+    _need(store.get_seller(seller_id), "seller")
+    if not title.strip():
         raise HTTPException(400, "title is required")
-
-    existing = db.list_products_for_seller(seller_id)
-    next_idx = len(existing) + 1
-    filename_base = f"seller{seller_id}_product{next_idx}"
-    original_path = f"app/uploads/{filename_base}.png"
-    watermarked_path = f"app/watermarked/{filename_base}.png"
-    _save_upload(image, original_path)
-
-    product = service.watermark_product(
-        seller_id=seller_id,
-        title=title,
-        sku=sku.strip() or None,
-        original_path=original_path,
-        watermarked_path=watermarked_path,
-    )
-    return JSONResponse({
-        "ok": True,
-        "product": product,
-        "download_url": f"/api/watermarked/{filename_base}.png",
-    })
+    try:
+        return {"product": guard.protect(seller_id, title.strip(), image.file,
+                                         authorized_url.strip() or None)}
+    except FileNotFoundError as e:
+        raise HTTPException(503, str(e))
+    except OSError:
+        raise HTTPException(400, "that file could not be read as an image")
 
 
-@app.get("/api/sellers/{seller_id}/products")
-async def api_list_products(seller_id: int):
-    seller = db.get_seller_by_id(seller_id)
-    if not seller:
-        raise HTTPException(404, "seller not found")
-    products = db.list_products_for_seller(seller_id)
-    return JSONResponse({"seller": seller, "products": products})
+@app.get("/api/products/{product_id}")
+def api_product(product_id: int):
+    return {"product": _need(guard.product_json(product_id), "product")}
 
 
-# ─── Scan endpoint ────────────────────────────────────────────────
-
-@app.post("/api/scan")
-async def api_scan(image: UploadFile = File(...)):
-    suspect_path = "app/uploads/_suspect.png"
-    _save_upload(image, suspect_path)
-
-    result = service.identify_product(suspect_path)
-    return JSONResponse({
-        "ok": True,
-        "match":         result["match"],
-        "ranking":       result["ranking"],
-        "n_candidates":  result["n_candidates"],
-        "threshold_note": result.get("threshold_note"),
-    })
+@app.delete("/api/products/{product_id}")
+def api_delete_product(product_id: int):
+    _need(store.get_product(product_id), "product")
+    guard.remove_product(product_id)
+    return {"ok": True}
 
 
-# ─── Static file serving ──────────────────────────────────────────
-
-@app.get("/api/watermarked/{filename}")
-async def api_watermarked(filename: str):
-    path = Path("app/watermarked") / filename
-    if not path.exists():
-        raise HTTPException(404, "not found")
-    return FileResponse(path, media_type="image/png", filename=f"watermarked_{filename}")
-
-
-# ─── Product-centric monitoring ───────────────────────────────────
-# Each product has a list of "authorized URLs" — the seller's own legitimate
-# places the image should appear (their Shopify, Etsy, etc). Monitor runs a
-# scan across a set of candidate images (each tagged with a supposed source
-# URL). Matches are checked against the authorized list:
-#   authorized=True  → image found where it's supposed to be
-#   authorized=False → image found somewhere UNAUTHORIZED → likely stolen
-# All findings are recorded to the database for a persistent dashboard.
-
-@app.get("/api/products/{product_id}/urls")
-async def api_list_authorized_urls(product_id: int):
-    if not db.get_product(product_id):
-        raise HTTPException(404, "product not found")
-    return JSONResponse({"urls": db.list_authorized_urls(product_id)})
+@app.post("/api/products/{product_id}/copies")
+def api_new_copy(product_id: int, label: str = Form(...)):
+    _need(store.get_product(product_id), "product")
+    if not label.strip():
+        raise HTTPException(400, "give the copy a label, e.g. the partner it is sent to")
+    return {"copy": guard.create_copy(product_id, label.strip())}
 
 
 @app.post("/api/products/{product_id}/urls")
-async def api_add_authorized_url(product_id: int, url: str = Form(...)):
-    if not db.get_product(product_id):
-        raise HTTPException(404, "product not found")
+def api_add_url(product_id: int, url: str = Form(...)):
+    _need(store.get_product(product_id), "product")
+    if not url.strip():
+        raise HTTPException(400, "url is required")
+    store.add_authorized_url(product_id, url.strip())
+    return {"authorized_urls": store.list_authorized_urls(product_id)}
+
+
+@app.delete("/api/urls/{url_id}")
+def api_delete_url(url_id: int):
+    store.delete_authorized_url(url_id)
+    return {"ok": True}
+
+
+# ─── attack lab ───────────────────────────────────────────────────
+
+@app.get("/api/lab/attacks")
+def api_lab_attacks():
+    return {"attacks": guard.lab_catalogue()}
+
+
+@app.post("/api/lab/run")
+def api_lab_run(copy_id: int = Form(...), attack: str = Form(...),
+                value: float | None = Form(None), stacked_on: str = Form("")):
+    copy = _need(store.get_copy(copy_id), "copy")
+    if attack not in guard.LAB_ATTACKS:
+        raise HTTPException(400, "unknown attack")
+    try:
+        attacked = guard.lab_apply(guard.lab_source(copy_id, stacked_on or None), attack, value)
+    except ImportError as e:
+        raise HTTPException(501, f"this attack needs an optional package: {e}")
+    result = guard.analyse(attacked)
+    traced = result["copy"] is not None and result["copy"]["id"] == copy_id
+    wrong = result["copy"] is not None and result["copy"]["id"] != copy_id
+    return {"attack": guard.LAB_ATTACKS[attack][0], "attacked_url": guard.media_url(attacked),
+            "expected_copy_id": copy_id, "expected_product_id": copy["product_id"],
+            "traced": traced, "wrong": wrong, "result": result}
+
+
+# ─── scan ─────────────────────────────────────────────────────────
+
+@app.post("/api/scan")
+def api_scan(image: UploadFile = File(...), page_url: str = Form(""), record: bool = Form(False)):
+    path = guard.DATA / "scans" / f"{uuid.uuid4().hex}.png"
+    try:
+        guard._save_normalised(image.file, path)
+    except OSError:
+        raise HTTPException(400, "that file could not be read as an image")
+    try:
+        return {"result": guard.analyse(str(path), page_url=page_url.strip() or None,
+                                        image_url=None, record=record)}
+    except FileNotFoundError as e:
+        raise HTTPException(503, str(e))
+
+
+# ─── web monitor ──────────────────────────────────────────────────
+
+@app.get("/api/watch")
+def api_watch():
+    return {"watch": store.list_watch_urls(), "schedule": crawler.scheduler_status()}
+
+
+@app.post("/api/watch")
+def api_add_watch(url: str = Form(...), label: str = Form("")):
     url = url.strip()
-    if not url:
-        raise HTTPException(400, "url required")
-    row = db.add_authorized_url(product_id, url)
-    return JSONResponse({"ok": True, "url": row})
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "the URL must start with http:// or https://")
+    store.add_watch_url(url, label.strip() or None)
+    return {"watch": store.list_watch_urls()}
 
 
-@app.delete("/api/products/urls/{url_id}")
-async def api_delete_authorized_url(url_id: int):
-    ok = db.delete_authorized_url(url_id)
-    if not ok:
-        raise HTTPException(404, "url not found")
-    return JSONResponse({"ok": True})
+@app.delete("/api/watch/{watch_id}")
+def api_delete_watch(watch_id: int):
+    store.delete_watch_url(watch_id)
+    return {"ok": True}
 
 
-@app.get("/api/products/{product_id}/findings")
-async def api_list_findings(product_id: int):
-    if not db.get_product(product_id):
-        raise HTTPException(404, "product not found")
-    return JSONResponse({"findings": db.list_findings_for_product(product_id)})
+@app.post("/api/watch/crawl")
+def api_crawl(url: str = Form("")):
+    url = url.strip()
+    results = [crawler.crawl_page(url)] if url else crawler.run_now()
+    slim = [{**r, "matches": [{"image_url": m["image_url"], "verdict": m["verdict"],
+                               "authorized": m["authorized"], "product": m["product"],
+                               "copy": m["copy"], "detection_id": m["detection_id"]}
+                              for m in r["matches"]]} for r in results]
+    return {"results": slim}
 
 
-@app.post("/api/monitor/scan")
-async def api_monitor_scan(
-    images: list[UploadFile] = File(...),
-    source_urls: str = Form(""),
-):
-    """
-    Batch scan a set of candidate images (simulating a reverse-image-search
-    crawler having fetched them). For each match found:
-      1. Look up which product it matched
-      2. Check if the supposed source URL is on that product's authorized list
-      3. Record the finding as authorized=True or authorized=False
-    Returns a summary broken down by authorized vs unauthorized.
-    """
-    urls = [u.strip() for u in source_urls.split(",")] if source_urls else []
+@app.get("/api/monitor/schedule")
+def api_schedule():
+    return crawler.scheduler_status()
 
-    authorized_findings = []
-    unauthorized_findings = []
-    scanned = 0
 
-    for i, upload in enumerate(images):
-        suspect_path = f"app/uploads/_monitor_{i}.png"
-        _save_upload(upload, suspect_path)
-        scanned += 1
+@app.post("/api/monitor/schedule")
+def api_set_schedule(minutes: int = Form(...)):
+    store.set_setting("crawl_minutes", str(max(0, minutes)))
+    return crawler.scheduler_status()
 
-        result = service.identify_product(suspect_path)
-        source_url = (urls[i] if i < len(urls) and urls[i]
-                      else f"(file: {upload.filename})")
 
-        if not result["match"]:
+@app.get("/api/detections")
+def api_detections():
+    return {"detections": [guard.detection_json(d) for d in store.list_detections()]}
+
+
+@app.delete("/api/detections")
+def api_clear_detections():
+    store.clear_detections()
+    return {"ok": True}
+
+
+# ─── evidence report ──────────────────────────────────────────────
+
+_VERDICT_TEXT = {
+    "watermark": ("Watermark read directly",
+                  "The invisible watermark was read from the found image without any reference "
+                  "to the original. The embedded ID and its keyed check tag both validated."),
+    "watermark_aligned": ("Watermark read after alignment",
+                          "The found image had been cropped, warped or placed inside another image. "
+                          "It was matched to the registered original by its visual features, warped back "
+                          "into place, and the watermark was then read. Areas the found image does not "
+                          "cover were filled from the un-watermarked original, which cannot contribute "
+                          "watermark signal."),
+    "fingerprint_only": ("Same picture, watermark not readable",
+                         "The found image shows the same photograph as the registered original "
+                         "(matched by visual features and structure), but the watermark could not be read. "
+                         "This establishes that the picture is the seller's; it does NOT establish which "
+                         "copy was taken."),
+}
+
+
+@app.get("/report/{detection_id}", response_class=HTMLResponse)
+def report(detection_id: int):
+    d = _need(store.get_detection(detection_id), "detection")
+    e = html.escape
+    title, explanation = _VERDICT_TEXT[d["verdict"]]
+    stages = d["details"].get("stages", [])
+    verify = next((s for s in stages if s["stage"] == "align_verify" and s.get("ok")), None)
+    blind = next((s for s in stages if s["stage"] == "blind" and s.get("ok")), None)
+    retrieve = next((s for s in stages if s["stage"] == "retrieve" and s.get("ok")), None)
+
+    facts = []
+    if blind:
+        facts.append(f"Bit errors corrected: {blind['bit_errors']} of {PAYLOAD_BITS} "
+                     f"(the code corrects up to {ECC_T}).")
+        facts.append(f"Chance that an unmarked image produces a valid ID by accident: about "
+                     f"{blind_false_positive_rate():.1e} per read.")
+    if retrieve:
+        facts.append(f"Visual match: {retrieve['inliers']} geometrically consistent feature points, "
+                     f"structural similarity {retrieve['similarity']:.2f}, "
+                     f"found image covers {retrieve['coverage']:.0%} of the original"
+                     + (" (mirrored)." if retrieve.get("flipped") else "."))
+    if verify:
+        if verify["method"] == "bch":
+            facts.append(f"After alignment the ID decoded with {verify['bit_errors']} corrected bit errors.")
+        else:
+            facts.append(f"After alignment {verify['bit_errors']} of {PAYLOAD_BITS} bits differed from this "
+                         f"copy's code; up to {verify['limit']} are accepted at a false-positive rate of 1e-6.")
+
+    def img(url, caption):
+        return (f'<figure><img src="{e(url)}"><figcaption>{e(caption)}</figcaption></figure>'
+                if url else "")
+
+    copy_line = (f"<tr><th>Traced copy</th><td>#{d['copy_id']} — {e(d['copy_label'] or '')} "
+                 f"(issued {e(d['copy_created_at'] or '')})</td></tr>" if d["copy_id"] else
+                 "<tr><th>Traced copy</th><td>not determined</td></tr>")
+    status = ("Authorised location" if d["authorized"] else "NOT an authorised location")
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>Evidence report #{d['id']}</title>
+<style>
+ body{{font:15px/1.5 -apple-system,Segoe UI,sans-serif;color:#111;max-width:860px;margin:32px auto;padding:0 20px}}
+ h1{{font-size:24px;margin:0}} h2{{font-size:16px;margin:28px 0 8px;border-bottom:1px solid #ccc;padding-bottom:4px}}
+ table{{border-collapse:collapse;width:100%}} th{{text-align:left;width:190px;vertical-align:top;color:#555;font-weight:500}}
+ td,th{{padding:5px 0}} .badge{{display:inline-block;padding:3px 10px;border-radius:99px;font-size:13px;
+ background:{'#e7f6ec' if d['authorized'] else '#fde8e8'};color:{'#17663a' if d['authorized'] else '#a01919'}}}
+ .imgs{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}} figure{{margin:0}}
+ img{{width:100%;border:1px solid #ccc}} figcaption{{font-size:12px;color:#555}} code{{font-size:12px;word-break:break-all}}
+ .note{{font-size:13px;color:#555}} @media print{{button{{display:none}}}}
+</style></head><body>
+<button onclick="print()" style="float:right">Print / save PDF</button>
+<h1>Evidence report #{d['id']}</h1>
+<p class="note">Generated by TraceMark (research prototype). Times are UTC.</p>
+<h2>Finding</h2>
+<table>
+<tr><th>Result</th><td><b>{e(title)}</b> &nbsp;<span class="badge">{status}</span></td></tr>
+<tr><th>Product</th><td>{e(d['product_title'])} (product #{d['product_id']})</td></tr>
+<tr><th>Rights holder</th><td>{e(d['seller_name'])} &lt;{e(d['seller_email'])}&gt;</td></tr>
+{copy_line}
+<tr><th>Found at (page)</th><td>{e(d['page_url'] or 'uploaded manually')}</td></tr>
+<tr><th>Image address</th><td><code>{e(d['image_url'] or '—')}</code></td></tr>
+<tr><th>First / last seen</th><td>{e(d['first_seen'])} / {e(d['last_seen'])} ({d['times_seen']}×)</td></tr>
+<tr><th>SHA-256 of found file</th><td><code>{e(d['details'].get('sha256', '—'))}</code></td></tr>
+</table>
+<h2>How it was established</h2>
+<p>{e(explanation)}</p>
+<ul>{''.join(f'<li>{e(f)}</li>' for f in facts)}</ul>
+<h2>Images</h2>
+<div class="imgs">
+{img(guard.media_url(d['original_path']), 'Registered original (held by the service)')}
+{img(guard.media_url(d['snapshot_path']), 'Image as found')}
+{img(guard.media_url(d['aligned_path']), 'Found image aligned to the original')}
+</div>
+<h2>Limits of this evidence</h2>
+<p class="note">This is the output of a research prototype, evaluated on a limited image set with simulated
+attacks. The false-positive figures are calculated from the code design and were not exceeded in testing;
+they are not a legal standard of proof. A "same picture" result without a watermark read cannot tell the
+seller's own copy apart from a stolen one.</p>
+</body></html>"""
+
+
+# ─── demo pages for the monitor ───────────────────────────────────
+# A fake marketplace with stolen (attacked) copies of your protected products
+# mixed with unrelated images, served by this app so the monitor can crawl a
+# real HTTP page during a demo without touching anyone else's site.
+
+_DEMO_ATTACKS = [("jpeg", 35), ("crop", 0.6), ("page", 0.6), ("overlay", None), ("mirror", None),
+                 ("social", None), ("perspective", 0.1), ("screenshot", None), ("rotate", 6),
+                 ("square", None)]
+
+
+@app.post("/api/demo/build")
+def api_demo_build(request: Request):
+    products = store.list_products()
+    if not products:
+        raise HTTPException(400, "protect at least one product first")
+    demo = guard.DATA / "demo"
+    for f in demo.glob("*"):
+        f.unlink()
+    rng = random.Random(42)
+    for i, p in enumerate(products[:10]):
+        copies = store.list_copies(p["id"])
+        if not copies:
             continue
-
-        product_id = result["match"]["product_id"]
-        auth_urls = [r["url"] for r in db.list_authorized_urls(product_id)]
-        # Simple substring match — real system would normalize/parse URLs properly
-        is_authorized = any(auth_url in source_url or source_url in auth_url
-                            for auth_url in auth_urls)
-
-        confidence = float(result["match"].get("confidence", 0))
-        detector = result["match"].get("winning_detector", "unknown")
-
-        db.record_finding(
-            product_id=product_id, source_url=source_url,
-            source_file=upload.filename, confidence=confidence,
-            detector=detector, authorized=is_authorized,
-        )
-
-        finding = {
-            "source_url": source_url,
-            "source_file": upload.filename,
-            "match": result["match"],
-            "confidence": confidence,
-            "authorized": is_authorized,
-        }
-        (authorized_findings if is_authorized else unauthorized_findings).append(finding)
-
-    return JSONResponse({
-        "ok": True,
-        "scanned": scanned,
-        "matches_found": len(authorized_findings) + len(unauthorized_findings),
-        "authorized": authorized_findings,
-        "unauthorized": unauthorized_findings,
-    })
+        attack, value = _DEMO_ATTACKS[i % len(_DEMO_ATTACKS)]
+        attacked = guard.lab_apply(rng.choice(copies)["file_path"], attack, value)
+        Path(attacked).rename(demo / f"stolen_{p['id']}_{attack}.png")
+    for i in range(5):
+        generate_distractor(f"demo_decoy_{i}", size=512, output_path=str(demo / f"decoy_{i}.png"))
+    base = str(request.base_url).rstrip("/")
+    store.add_watch_url(f"{base}/demo/shop", "Demo: MegaDeals (stolen images)")
+    return {"shop_url": f"{base}/demo/shop", "images": len(list(demo.glob('*.png')))}
 
 
-# Frontend at /
+@app.get("/demo/shop", response_class=HTMLResponse)
+def demo_shop():
+    files = sorted((guard.DATA / "demo").glob("*.png"))
+    random.Random(1).shuffle(files)
+    cards = "".join(
+        f'<div class="card"><img src="/media/demo/{f.name}"><b>Super Deal #{i + 1}</b>'
+        f'<span>${19 + 7 * i}.99</span><button>Buy now</button></div>' for i, f in enumerate(files))
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>MegaDeals</title><style>
+body{{font-family:sans-serif;margin:0;background:#f3f3f3}}header{{background:#232f3e;color:#fff;padding:16px 24px;font-size:22px}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px;padding:24px}}
+.card{{background:#fff;padding:12px;border-radius:6px;display:flex;flex-direction:column;gap:6px}}
+.card img{{width:100%;height:170px;object-fit:contain}}.card span{{color:#b12704;font-size:18px}}
+button{{background:#ffd814;border:0;padding:8px;border-radius:99px}}</style></head><body>
+<header>MegaDeals — unbeatable prices <small style="opacity:.6">(demo page generated by TraceMark)</small></header>
+<div class="grid">{cards or '<p>Nothing here yet. Build the demo from the Web Monitor page.</p>'}</div></body></html>"""
+
+
+# ─── media + frontend ─────────────────────────────────────────────
+
+@app.get("/media/{path:path}")
+def media(path: str):
+    full = (guard.DATA / path).resolve()
+    if guard.DATA.resolve() not in full.parents or not full.is_file() or full.suffix == ".db":
+        raise HTTPException(404, "not found")
+    return FileResponse(full)
+
+
+@app.exception_handler(FileNotFoundError)
+def _missing_checkpoint(request, exc):
+    return JSONResponse({"detail": str(exc)}, status_code=503)
+
+
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

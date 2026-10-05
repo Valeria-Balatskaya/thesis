@@ -9,3 +9,5 @@ fastapi==0.141.1
 uvicorn==0.52.1
 python-multipart==0.0.32
 pytest==9.1.1
+opencv-python==4.13.0.92
+pillow-heif==1.8.0
