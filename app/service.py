@@ -1,12 +1,12 @@
 # app/service.py
 # Bridges FastAPI routes with the ensemble watermarking system.
 #
-# Architecture: dual-storage ensemble.
-#   - Seller uploads original → we produce TWO watermarked versions (DCT + HiDDeN)
-#   - Seller only sees/downloads the DCT version (41 dB quality)
-#   - HiDDeN version is kept server-side as a robust backup
-#   - Scan tries to identify the suspect against BOTH versions of every product
-#   - Whichever detector fires wins → 91% overall accuracy on our benchmark
+# Architecture: layered ensemble (see src/ensemble.py).
+#   - Seller uploads original → HiDDeN residual + DCT are layered into ONE image
+#   - That single image is what the seller downloads and publishes, so both
+#     watermarks travel with every stolen copy
+#   - The HiDDeN-only intermediate is kept server-side as the DCT reference
+#   - Scan runs both detectors on the suspect; whichever fires wins
 
 from pathlib import Path
 
@@ -30,13 +30,13 @@ DCT_ALPHA = 0.02
 DCT_N_COEFFS = 500
 DCT_THRESHOLD = 6.0
 HIDDEN_DETECTED_BER = 0.40
-ALGORITHM_NAME = "ensemble_dual"
+ALGORITHM_NAME = "ensemble_layered"
 
 
-def _hidden_path_for(watermarked_path: str) -> str:
-    """Derive the HiDDeN companion path from the primary DCT path."""
+def _reference_path_for(watermarked_path: str) -> str:
+    """Server-side DCT reference (HiDDeN-only intermediate) for a published image."""
     p = Path(watermarked_path)
-    return str(p.with_name(p.stem + "_hidden" + p.suffix))
+    return str(p.with_name(p.stem + "_ref" + p.suffix))
 
 
 def watermark_product(seller_id: int, title: str, sku: str | None,
@@ -55,11 +55,9 @@ def watermark_product(seller_id: int, title: str, sku: str | None,
     )
 
     seller_payload = f"PRODUCT:{product['id']}"
-    hidden_path = _hidden_path_for(watermarked_path)
-
     ensemble.embed(original_path, seller_payload,
-                   dct_output=watermarked_path,
-                   hidden_output=hidden_path)
+                   output_path=watermarked_path,
+                   reference_path=_reference_path_for(watermarked_path))
 
     return product
 
@@ -79,15 +77,20 @@ def identify_product(suspect_path: str) -> dict:
     candidates = []
     for p in products:
         seller_payload = f"PRODUCT:{p['id']}"
-        # Deterministic re-embed to recover DCT metadata
+        # Deterministic re-embed on the reference to recover DCT metadata
+        reference = _reference_path_for(p["watermarked_path"])
+        if not Path(reference).exists():
+            # Product created before the layered design: DCT was embedded on the original
+            reference = p["original_path"]
         temp_out = f"app/watermarked/_probe_{p['id']}.png"
         dct_meta = dct_embed(
-            p["original_path"], seller_payload, temp_out,
+            reference, seller_payload, temp_out,
             alpha=p["alpha"], n_coeffs=p["n_coeffs"],
         )
         candidates.append({
             "seller_id": seller_payload,
             "original_path": p["original_path"],
+            "reference_path": reference,
             "dct_meta": dct_meta,
             "_product_row": p,
         })

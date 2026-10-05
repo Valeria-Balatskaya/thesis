@@ -42,7 +42,7 @@ print(f"msg_len={model.msg_len}, image_size={model.image_size}, device={model.de
 for img, seller in SELLERS.items():
     orig = f"data/sipi/{img}.png"
     wmk = f"results/hidden_eval/wmk_{img}.png"
-    model.embed(orig, seller, wmk)
+    model.embed(orig, seller, wmk, mode="legacy")
     print(f"  embedded {seller} into {img}")
 
 rows = []
