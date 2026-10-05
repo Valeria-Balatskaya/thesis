@@ -48,10 +48,9 @@ the noise attacks are unseeded.
 
 ## Agreed roadmap
 1. ✅ Fix architecture (single layered image) + honest benchmark with false positives
-2. **In progress:** HiDDeN v2 code, BCH payload, Colab notebook and BER/FPR
-   regression test are written. Remaining: train in Colab, run
-   `tests/test_hidden_v2_eval.py`, then integrate v2 into `src/ensemble.py` / `app/`
-   and re-run the deployed benchmark
+2. **Mostly done:** HiDDeN v2 trained in Colab and evaluated (see training notes).
+   Remaining: test on real product photos (white backgrounds), integrate v2 into
+   `src/ensemble.py` / `app/`, re-run the deployed benchmark
 3. Geometric alignment of suspect to original (SIFT/ORB) before DCT detection
 4. Compare with pretrained robust watermarks (Watermark Anything, TrustMark, StegaStamp)
 5. AI-edit attacks: SD img2img at several strengths, inpainting, background
@@ -71,6 +70,15 @@ the noise attacks are unseeded.
   screenshot and print-photo distortions were still near chance, and crop accuracy
   swung between checkpoints (99% -> 20%), so training was not yet stable.
   These are trial numbers, not thesis results — the Colab run replaces them.
+- **Colab model** (`checkpoints/hidden_v2_best.pt`, step 28,000 of 40,000, COCO val2017,
+  2.1 it/s on a T4): on the 5 SIPI photos x 12 real attacks **58/60 = 97% correct
+  product ID, blind, 40.0 dB, 0 false positives in 1,560 clean images** (v4 layered:
+  82%, 37.2 dB, 16/60). Only misses: peppers and splash under `native_screenshot`.
+  Colab validation at full severity: perspective 44% decodable, screenshot 69%,
+  print-photo 79%, combo 70%, everything else 99-100%.
+  **Generalisation gap:** on the 25 procedural pattern images (flat saturated shapes)
+  it reads only 13%, even clean (BER ~0.19). Not yet tested on real product photos
+  with flat white backgrounds — that is the next thing to check.
 - Local trials: `--device mps` with `PYTORCH_ENABLE_MPS_FALLBACK=1` (~3 it/s); CPU is ~10x slower.
 
 ## Conventions
