@@ -15,11 +15,14 @@
 # v1 experiments used. Plain sqlite3, no ORM.
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-DATA_DIR = Path("app/data")
+# TRACEMARK_DATA points tests and experiments at a separate folder so they
+# never touch the data of a running app.
+DATA_DIR = Path(os.environ.get("TRACEMARK_DATA", "app/data"))
 DB_PATH = DATA_DIR / "tracemark.db"
 
 # Watermark IDs start here so that tiny integers (which a biased decoder could

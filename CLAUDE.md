@@ -85,6 +85,38 @@ the noise attacks are unseeded.
 - Run times: ~5-10 min on CPU. Results at 1.0 predate the stricter structure check
   (its robustness columns are unaffected; control B was 31/60 then).
 
+## Visibility (measured 2026-10-05, 12 product photos, CIEDE2000; ~1 = just noticeable)
+| Model / setting | PSNR | dE mean | dE on flat areas | notes |
+|---|---|---|---|---|
+| v2, strength 1.0 | 40.0 | 3.2 | 3.2 | green/purple tint clearly visible on white |
+| v2, 0.5 | 45.8 | 1.6 | 1.6 | still visible to the author |
+| v2, 0.7 + flat mask 0.3 (app default) | 47.5 | 1.2 | 0.85 | full pipeline 95% (584 imgs), 50% crop 20% |
+| v3 trial (chroma_weight 8, mask_floor 0.3) | 45.2 | 0.40 | 0.29 | 20-min local trial on synthetic data |
+
+- v2 carries its signal entirely in low-frequency colour; no strength/mask setting is both
+  invisible and robust. PSNR does not capture this — use `src.metrics.visibility` (dE).
+- v3 = same network trained with `--chroma-weight 8 --mask-floor 0.3` (colour changes cost
+  8x in the budget; 30% amplitude on flat areas). The trial read 12/12 clean, JPEG 30,
+  messenger, CDN 360 but 0/12 native screenshot and screen photo — the same geometric
+  gap the first v2 trial had before full training. **Needs the full Colab run**
+  (`notebooks/train_hidden_v2.ipynb`, RUN='v3'); the app prefers
+  `checkpoints/hidden_v3_best.pt` when present. Not yet proven robust.
+
+## In-the-wild checks (tests/test_in_the_wild.py, 12 photos, v2 0.7/0.3)
+- Real headless-Chrome captures of a listing page: photo shown at 480px (1x, 2x) 12/12,
+  340px on a 3x phone 12/12, 320px 11/12, **200px search-grid 0/12**. All via alignment.
+- Simulated CDN re-encodes (WebP/JPEG q80): >= 360px 12/12; 192px 10-12/12; **<= 128px lost**.
+- `scripts/field_test.py <folder>` scores images collected by hand (marketplace
+  downloads, OS screenshots, phone photos, messenger forwards) against the app's catalogue.
+- Allegro: listing images are served by its CDN in fixed sizes; crawling listing pages is
+  blocked by bot protection and against the terms — use the official REST API
+  (developer.allegro.pl, OAuth) to list offers and their image URLs, then feed those to
+  `app/crawler.py`. Not implemented (needs the user's API credentials).
+
+## Working rules learned the hard way
+- The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
+  seed it. Test with `TRACEMARK_DATA=<other folder> uvicorn app.main:app --port 8765`.
+
 ## Agreed roadmap
 1. ✅ Fix architecture (single layered image) + honest benchmark with false positives
 2. ✅ HiDDeN v2 trained in Colab, evaluated, and integrated into the app
@@ -98,7 +130,8 @@ the noise attacks are unseeded.
    still simulations)
 8. Web monitor discovery: plug a reverse-image-search API (Google Vision Web Detection,
    TinEye) into `app/crawler.py`; today it only crawls a watchlist
-9. Retrain v2 with a luminance/perceptual constraint so 40 dB is not visibly tinted
+9. **Next:** full Colab run of v3 (colour charge + flat-area mask), then re-run
+   `test_hidden_v2_eval.py`, `test_defence_benchmark.py`, `test_in_the_wild.py` on it
 
 ## HiDDeN v2 training notes
 - HiDDeN's plain design (spatially constant message map + pooled decoder) stalled at

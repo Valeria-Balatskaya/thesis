@@ -28,6 +28,8 @@ uvicorn app.main:app --reload
 # Benchmarks are standalone scripts (not pytest)
 python tests/test_hidden_v2_eval.py                       # watermark alone, classic attacks
 python tests/test_defence_benchmark.py data/products_png  # full pipeline, modern + AI attacks
+python tests/test_in_the_wild.py data/products_png        # real browser captures, CDN sizes
+python scripts/field_test.py data/field                   # score images you collected by hand
 ```
 
 Optional AI attacks (background replacement, diffusion-VAE regeneration):

@@ -123,6 +123,21 @@ def social_recompress(image_path: str, output_path: str, max_side: int = 1080) -
     _jpeg(_jpeg(img, 72), 80).save(output_path, format="PNG")
 
 
+def marketplace_variant(image_path: str, output_path: str, size: int = 512,
+                        fmt: str = "webp", quality: int = 80) -> None:
+    """
+    What a marketplace image CDN does to an uploaded photo: fit it into a
+    size x size box and re-encode it as WebP or JPEG. Marketplaces serve the
+    same listing photo in several such sizes (gallery, search grid, thumbnail).
+    """
+    img = _open(image_path)
+    img.thumbnail((size, size), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP" if fmt == "webp" else "JPEG", quality=quality)
+    buf.seek(0)
+    Image.open(buf).convert("RGB").save(output_path, format="PNG")
+
+
 # ─── Content edits ────────────────────────────────────────────────
 
 def promo_overlay(image_path: str, output_path: str, text: str = "SALE -50%") -> None:

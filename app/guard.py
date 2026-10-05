@@ -26,12 +26,19 @@ try:                                  # iPhone photos
 except ImportError:
     pass
 
-CHECKPOINT = "checkpoints/hidden_v2_best.pt"
+# hidden_v3_best.pt (trained with a colour charge and flat-area masking, see
+# notebooks/train_hidden_v2.ipynb) is preferred when present.
+CHECKPOINT = next((c for c in ("checkpoints/hidden_v3_best.pt", "checkpoints/hidden_v2_best.pt")
+                   if Path(c).exists()), "checkpoints/hidden_v2_best.pt")
 DATA = store.DATA_DIR
 MAX_SIDE = 1600                       # uploads are downscaled to this
-STRENGTH = 0.5                        # watermark strength: 1.0 = 40 dB (as trained), 0.5 ~ 46 dB.
-                                      # At 1.0 a colour tint is visible on white backgrounds;
-                                      # 0.5 kept full robustness in tests/test_defence_benchmark.py
+# Watermark visibility settings. At full strength (1.0 = 40 dB, as trained) the
+# current checkpoint shows a green/purple tint on white backgrounds, because it
+# hides its signal in broad colour patches. Mitigation: 0.7 strength, and only
+# 30% of that on flat areas (src/hidden_v2.texture_mask). Robustness with these
+# values is measured by tests/test_defence_benchmark.py <folder> 35 0.7 0.3.
+# A v3 checkpoint has the masking built in and is used as trained.
+STRENGTH, MASK_FLOOR = (1.0, None) if "v3" in CHECKPOINT else (0.7, 0.3)
 
 for sub in ("originals", "copies", "diff", "lab", "scans", "crawl", "aligned", "demo"):
     (DATA / sub).mkdir(parents=True, exist_ok=True)
@@ -104,7 +111,8 @@ def create_copy(product_id: int, label: str) -> dict:
     path = DATA / "copies" / f"p{product_id}_c{copy_id}.png"
     p = pipeline()
     with _lock:
-        p.model.embed_product(product["original_path"], copy_id, str(path), strength=STRENGTH)
+        p.model.embed_product(product["original_path"], copy_id, str(path),
+                              strength=STRENGTH, mask_floor=MASK_FLOOR)
     q = quality(product["original_path"], str(path))
     store.finish_copy(copy_id, str(path), q["PSNR_dB"], q["SSIM"])
     _write_diff(product["original_path"], str(path), DATA / "diff" / f"c{copy_id}.png")
@@ -230,6 +238,7 @@ LAB_ATTACKS = {
     "rotate":      ("Rotate", "Re-use", ma.rotate, {}, ("degrees", -30, 30, 2, 8)),
     "mirror":      ("Mirror", "Re-use", ma.mirror, {}, None),
     "social":      ("Messenger re-upload", "Re-use", ma.social_recompress, {}, None),
+    "marketplace": ("Marketplace CDN (WebP)", "Re-use", ma.marketplace_variant, {}, ("size", 64, 1024, 32, 360)),
     "overlay":     ("Sale banner + logo", "Re-use", ma.promo_overlay, {}, None),
     "screenshot":  ("Native screenshot", "Capture", ea.native_screenshot_simulation, {}, None),
     "page":        ("Screenshot of a shop page", "Capture", ma.page_screenshot, {}, ("scale", 0.3, 0.9, 0.05, 0.55)),
@@ -262,7 +271,7 @@ def lab_apply(source_path: str, attack: str, value: float | None) -> str:
     if slider and value is not None:
         param, lo, hi, _, default = slider
         value = min(max(float(value), lo), hi)
-        kwargs[param] = int(value) if isinstance(default, int) and param in ("quality",) else value
+        kwargs[param] = int(value) if param in ("quality", "size") else value
     out = DATA / "lab" / f"{uuid.uuid4().hex}.png"
     fn(source_path, str(out), **kwargs)
     return str(out)

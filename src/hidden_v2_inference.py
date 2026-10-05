@@ -27,7 +27,9 @@ class HiddenV2Model:
         self.msg_len = ckpt["msg_len"]
         self.image_size = ckpt["image_size"]
         self.target_psnr = ckpt["target_psnr"]
-        self.model = HiDDeNv2(self.msg_len, self.image_size, self.target_psnr).to(device)
+        self.model = HiDDeNv2(self.msg_len, self.image_size, self.target_psnr,
+                              ckpt.get("chroma_weight", 1.0),
+                              ckpt.get("mask_floor", 1.0)).to(device)
         self.model.load_state_dict(ckpt["model"])
         self.model.eval()
 
@@ -37,11 +39,16 @@ class HiddenV2Model:
 
     @torch.no_grad()
     def embed_bits(self, image_path: str, bits, output_path: str,
-                   strength: float = 1.0) -> None:
-        """Embed msg_len raw bits. strength scales the residual (1.0 = target_psnr)."""
+                   strength: float = 1.0, mask_floor: float | None = None) -> None:
+        """
+        Embed msg_len raw bits. strength scales the residual (1.0 = target_psnr).
+        mask_floor < 1 weakens the watermark on flat areas (see hidden_v2.texture_mask);
+        None uses whatever the checkpoint was trained with.
+        """
         message = torch.tensor(np.asarray(bits), dtype=torch.float32,
                                device=self.device).view(1, self.msg_len)
-        out = self.model.watermark(self._load(image_path), message, strength)
+        out = self.model.watermark(self._load(image_path), message, strength,
+                                   mask_floor=mask_floor)
         out = (out.squeeze(0).permute(1, 2, 0).cpu().numpy() * 255).round()
         Image.fromarray(out.astype(np.uint8)).save(output_path, format="PNG")
 
@@ -56,10 +63,11 @@ class HiddenV2Model:
     # ─── product-ID payload (BCH protected, see src/payload.py) ───
 
     def embed_product(self, image_path: str, product_id: int, output_path: str,
-                      strength: float = 1.0) -> dict:
+                      strength: float = 1.0, mask_floor: float | None = None) -> dict:
         if self.msg_len != PAYLOAD_BITS:
             raise ValueError(f"checkpoint embeds {self.msg_len} bits, payload needs {PAYLOAD_BITS}")
-        self.embed_bits(image_path, encode_product_id(product_id), output_path, strength)
+        self.embed_bits(image_path, encode_product_id(product_id), output_path, strength,
+                        mask_floor)
         return {"product_id": product_id, "output_path": output_path}
 
     def read_product(self, image_path: str, try_aspects: bool = True) -> dict:

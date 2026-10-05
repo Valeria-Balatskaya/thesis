@@ -17,6 +17,7 @@
 #
 # Run: python tests/test_defence_benchmark.py [image_folder] [n_registered] [strength]
 #   strength scales the watermark (1.0 = the 40 dB it was trained at, 0.5 ~ 46 dB)
+#   optional 4th argument: mask floor (e.g. 0.3) weakens the watermark on flat areas
 
 import sys, os, csv, time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -34,6 +35,7 @@ CHECKPOINT = "checkpoints/hidden_v2_best.pt"
 IMAGE_DIR = sys.argv[1] if len(sys.argv) > 1 else "data/products_png"
 N_REGISTERED = int(sys.argv[2]) if len(sys.argv) > 2 else 35
 STRENGTH = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
+MASK_FLOOR = float(sys.argv[4]) if len(sys.argv) > 4 else None   # < 1 weakens flat areas
 N_AI = 12            # AI attacks are slow on CPU: run them on the first N_AI products
 
 ATTACKS = [
@@ -42,6 +44,7 @@ ATTACKS = [
     ("marketplace_square", ea.marketplace_square,           {"target_size": 512}),
     ("native_screenshot",  ea.native_screenshot_simulation, {}),
     ("social_recompress",  ma.social_recompress,            {}),
+    ("cdn_webp_360",       ma.marketplace_variant,          {"size": 360}),
     ("offcentre_crop_70",  ma.offcentre_crop,               {"keep": 0.7, "dx": 1.0, "dy": 0.0}),
     ("offcentre_crop_50",  ma.offcentre_crop,               {"keep": 0.5, "dx": 0.2, "dy": 0.9}),
     ("rotate_8",           ma.rotate,                       {"degrees": 8}),
@@ -87,7 +90,7 @@ def _attack(fn, kwargs, src, dst):
 
 # ─── Register: every product gets two copies with different IDs ───
 
-print(f"Watermark strength {STRENGTH}")
+print(f"Watermark strength {STRENGTH}, mask floor {MASK_FLOOR}")
 print(f"Registering {len(registered)} products from {IMAGE_DIR} "
       f"({len(held_out)} photos held out as unregistered)...")
 products = {}
@@ -98,8 +101,8 @@ for i, fname in enumerate(registered):
     pipeline.register(pid, orig, [listing_id, partner_id])
     listing = f"{OUT}/pub_{pid}_listing.png"
     partner = f"{OUT}/pub_{pid}_partner.png"
-    model.embed_product(orig, listing_id, listing, strength=STRENGTH)
-    model.embed_product(orig, partner_id, partner, strength=STRENGTH)
+    model.embed_product(orig, listing_id, listing, strength=STRENGTH, mask_floor=MASK_FLOOR)
+    model.embed_product(orig, partner_id, partner, strength=STRENGTH, mask_floor=MASK_FLOOR)
     products[pid] = {"orig": orig, "listing": listing, "partner": partner,
                      "listing_id": listing_id, "partner_id": partner_id}
 
@@ -223,7 +226,7 @@ for label, key in (("held-out product photos (similar objects)", "similar"),
 print(f"  C. leak tracing, partner copy ({trace['n']} tests): correct copy {trace['correct']}, "
       f"confused with the listing copy {trace['swapped']}")
 
-SUFFIX = "" if STRENGTH == 1.0 else f"_s{STRENGTH}"
+SUFFIX = ("" if STRENGTH == 1.0 else f"_s{STRENGTH}") + ("" if MASK_FLOOR is None else f"_m{MASK_FLOOR}")
 with open(f"output/defence_benchmark{SUFFIX}.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
     w.writeheader(); w.writerows(rows)

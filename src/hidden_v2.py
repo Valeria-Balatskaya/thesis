@@ -325,13 +325,51 @@ class Distortions(nn.Module):
 
 # ─── Full model ───────────────────────────────────────────────────
 
+def _gaussian_blur(x: torch.Tensor, sigma: float) -> torch.Tensor:
+    radius = max(1, int(3 * sigma))
+    k = torch.arange(-radius, radius + 1, dtype=torch.float32, device=x.device)
+    k = torch.exp(-k ** 2 / (2 * sigma ** 2))
+    k = (k / k.sum()).view(1, 1, 1, -1).repeat(x.size(1), 1, 1, 1)
+    x = F.conv2d(F.pad(x, (radius, radius, 0, 0), mode="replicate"), k, groups=x.size(1))
+    return F.conv2d(F.pad(x, (0, 0, radius, radius), mode="replicate"),
+                    k.transpose(2, 3), groups=x.size(1))
+
+
+def _luma(x: torch.Tensor) -> torch.Tensor:
+    return 0.299 * x[:, 0:1] + 0.587 * x[:, 1:2] + 0.114 * x[:, 2:3]
+
+
+def texture_mask(image: torch.Tensor, floor: float, tau: float = 0.03) -> torch.Tensor:
+    """
+    Perceptual mask in [floor, 1]: 1 where the image is textured, `floor` where
+    it is flat (white backgrounds, plain surfaces), where the eye notices a
+    watermark most. Based on local luminance standard deviation.
+    """
+    unit = max(image.shape[-2:]) / 256          # blur radii scale with image size
+    y = _luma(image)
+    mean = _gaussian_blur(y, unit)
+    std = (_gaussian_blur(y * y, unit) - mean * mean).clamp(min=0).sqrt()
+    return _gaussian_blur(floor + (1 - floor) * (std / tau).clamp(0, 1), 2 * unit)
+
+
 class HiDDeNv2(nn.Module):
     def __init__(self, msg_len: int = 63, image_size: int = 128,
-                 target_psnr: float = 40.0):
+                 target_psnr: float = 40.0, chroma_weight: float = 1.0,
+                 mask_floor: float = 1.0):
+        """
+        chroma_weight: how much more a colour change counts against the quality
+            budget than a brightness change. 1.0 = plain RGB budget. Trained at
+            1.0 the network hides the message in broad colour patches, which are
+            visible as a green/purple tint on white backgrounds.
+        mask_floor: watermark amplitude on flat image areas relative to textured
+            ones (1.0 = no masking).
+        """
         super().__init__()
         self.msg_len = msg_len
         self.image_size = image_size
         self.target_psnr = target_psnr
+        self.chroma_weight = chroma_weight
+        self.mask_floor = mask_floor
         self.encoder = EncoderV2(msg_len)
         self.decoder = DecoderV2(msg_len)
         self.distort = Distortions()
@@ -344,20 +382,30 @@ class HiDDeNv2(nn.Module):
                              align_corners=False, antialias=True)
 
     def watermark(self, image: torch.Tensor, message: torch.Tensor,
-                  strength: float = 1.0, psnr: float | None = None) -> torch.Tensor:
+                  strength: float = 1.0, psnr: float | None = None,
+                  mask_floor: float | None = None) -> torch.Tensor:
         """
         Full-resolution image [B,3,H,W] in [0,1] -> watermarked image, same size.
         The residual is zero-mean per channel (no global colour shift) and
-        scaled so the result sits at target_psnr (strength=1). `psnr` overrides
-        the target (used by the training curriculum).
+        scaled to the quality budget: target_psnr at strength=1, with colour
+        changes counted chroma_weight times. `psnr` overrides the target
+        (training curriculum); `mask_floor` overrides the model's masking.
         """
         residual = self.encoder(self._to_model_size(image), message)
         residual = F.interpolate(residual, size=image.shape[-2:], mode="bicubic",
                                  align_corners=False)
         residual = residual - residual.mean(dim=(2, 3), keepdim=True)
-        rms = residual.pow(2).mean(dim=(1, 2, 3), keepdim=True).sqrt()
+        # Budget = plain RGB energy, plus an extra charge on the colour part of
+        # the residual (chroma_weight = 1 is exactly the plain RGB budget).
+        energy = residual.pow(2).mean(dim=(1, 2, 3), keepdim=True)
+        if self.chroma_weight != 1.0:
+            chroma = residual - _luma(residual)
+            energy = energy + (self.chroma_weight - 1) * chroma.pow(2).mean(dim=(1, 2, 3), keepdim=True)
         target_rms = 10 ** (-(psnr or self.target_psnr) / 20)
-        residual = residual * (target_rms / (rms + 1e-8)) * strength
+        residual = residual * (target_rms / (energy.sqrt() + 1e-8)) * strength
+        floor = self.mask_floor if mask_floor is None else mask_floor
+        if floor < 1.0:
+            residual = residual * texture_mask(image, floor)
         return torch.clamp(image + residual, 0, 1)
 
     def decode(self, image: torch.Tensor) -> torch.Tensor:
