@@ -49,8 +49,7 @@ the noise attacks are unseeded.
 ## Agreed roadmap
 1. ✅ Fix architecture (single layered image) + honest benchmark with false positives
 2. **Mostly done:** HiDDeN v2 trained in Colab and evaluated (see training notes).
-   Remaining: test on real product photos (white backgrounds), integrate v2 into
-   `src/ensemble.py` / `app/`, re-run the deployed benchmark
+   Remaining: integrate v2 into `src/ensemble.py` / `app/`, re-run the deployed benchmark
 3. Geometric alignment of suspect to original (SIFT/ORB) before DCT detection
 4. Compare with pretrained robust watermarks (Watermark Anything, TrustMark, StegaStamp)
 5. AI-edit attacks: SD img2img at several strengths, inpainting, background
@@ -77,8 +76,17 @@ the noise attacks are unseeded.
   Colab validation at full severity: perspective 44% decodable, screenshot 69%,
   print-photo 79%, combo 70%, everything else 99-100%.
   **Generalisation gap:** on the 25 procedural pattern images (flat saturated shapes)
-  it reads only 13%, even clean (BER ~0.19). Not yet tested on real product photos
-  with flat white backgrounds — that is the next thing to check.
+  it reads only 13%, even clean (BER ~0.19).
+- **Product photos** (`data/products_png/`, 47 iPhone shots of phones/boxes on white or
+  grey, 1024x768, git-ignored; convert HEIC with `sips -s format png -Z 1024`):
+  `python tests/test_hidden_v2_eval.py checkpoints/hidden_v2_best.pt data/products_png`
+  -> **564/564 = 100% across 12 attacks, 0 false positives in 2,064 clean images**.
+  Without the aspect-ratio fallback `marketplace_square` was 2/47: the watermark is
+  position-dependent, so a centre crop of a 4:3 photo to a square misaligns it.
+  `read_product` now pads a failed read back to common aspect ratios (4:3, 3:4, 3:2,
+  2:3, 16:9, 9:16) and retries -> 47/47. Limits: only centre crops from those ratios;
+  off-centre or arbitrary crops are not handled (roadmap 3). The 47 photos are one
+  session, one camera, a handful of products — not independent samples.
 - Local trials: `--device mps` with `PYTORCH_ENABLE_MPS_FALLBACK=1` (~3 it/s); CPU is ~10x slower.
 
 ## Conventions

@@ -126,3 +126,6 @@ data/div2k/
 data/coco/
 *.pt
 *.pth 
+# Personal test photos (not for the repo)
+data/products/
+data/products_png/

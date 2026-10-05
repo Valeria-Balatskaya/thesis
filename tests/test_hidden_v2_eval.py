@@ -12,7 +12,9 @@
 # and false positives: un-watermarked images, clean and attacked, must never
 # yield a product ID.
 #
-# Run: python tests/test_hidden_v2_eval.py [checkpoint]
+# Run: python tests/test_hidden_v2_eval.py [checkpoint] [image_folder]
+#   image_folder (optional): evaluate on your own photos (PNG/JPG) instead of
+#   the 5 SIPI images, e.g. data/products_png
 
 import sys, os, csv
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -28,6 +30,7 @@ from src.metrics import compute
 from src import attacks, ecommerce_attacks as ea
 
 CHECKPOINT = sys.argv[1] if len(sys.argv) > 1 else "checkpoints/hidden_v2_best.pt"
+IMAGE_DIR = sys.argv[2] if len(sys.argv) > 2 else None
 SIPI = ["baboon", "airplane", "peppers", "splash", "house"]
 N_SYNTHETIC = 25          # extra watermarked test images (procedural)
 N_CLEAN_DISTRACTORS = 100  # un-watermarked images for the false-positive test
@@ -56,7 +59,9 @@ if not os.path.exists(CHECKPOINT):
     sys.exit(f"Checkpoint not found: {CHECKPOINT}\n"
              "Train it first (notebooks/train_hidden_v2.ipynb) and copy it into checkpoints/.")
 
-OUT = "results/hidden_v2_eval"
+TAG = os.path.basename(os.path.normpath(IMAGE_DIR)) if IMAGE_DIR else "sipi"
+OUT = f"results/hidden_v2_eval_{TAG}" if IMAGE_DIR else "results/hidden_v2_eval"
+CSV_PREFIX = f"hidden_v2_{TAG}" if IMAGE_DIR else "hidden_v2"
 os.makedirs(OUT, exist_ok=True)
 os.makedirs("output", exist_ok=True)
 np.random.seed(0)   # attacks.gaussian_noise / screenshot_simulation use the global RNG
@@ -74,7 +79,13 @@ def _attack(fn, kwargs, src, dst):
 
 # ─── Test images: 5 SIPI + procedural ones ────────────────────────
 
-originals = {name: f"data/sipi/{name}.png" for name in SIPI}
+if IMAGE_DIR:
+    files = sorted(f for f in os.listdir(IMAGE_DIR)
+                   if f.lower().endswith((".png", ".jpg", ".jpeg")))
+    originals = {os.path.splitext(f)[0]: os.path.join(IMAGE_DIR, f) for f in files}
+else:
+    originals = {name: f"data/sipi/{name}.png" for name in SIPI}
+REAL = set(originals)
 for i in range(N_SYNTHETIC):
     originals[f"synth{i}"] = generate_distractor(
         f"v2eval_wm_{i}", size=512, output_path=f"{OUT}/orig_synth{i}.png")
@@ -126,11 +137,11 @@ print("-" * 45)
 for atk_name, _, _ in ATTACK_SUITE:
     cells = []
     for is_real in (True, False):
-        sub = [r for r in rows if r["attack"] == atk_name and (r["image"] in SIPI) == is_real]
+        sub = [r for r in rows if r["attack"] == atk_name and (r["image"] in REAL) == is_real]
         cells.append(f"{sum(r['decoded_id'] == r['true_id'] for r in sub)}/{len(sub)}")
     print(f"{atk_name:<20}{cells[0]:>13}{cells[1]:>12}")
-real_rows = [r for r in rows if r["image"] in SIPI]
-synth_rows = [r for r in rows if r["image"] not in SIPI]
+real_rows = [r for r in rows if r["image"] in REAL]
+synth_rows = [r for r in rows if r["image"] not in REAL]
 real_rate = sum(r["decoded_id"] == r["true_id"] for r in real_rows) / len(real_rows)
 synth_rate = sum(r["decoded_id"] == r["true_id"] for r in synth_rows) / max(1, len(synth_rows))
 print("-" * 45)
@@ -153,13 +164,13 @@ for name, path in clean.items():
                         "decoded_id": res["product_id"], "reason": res["reason"]})
 n_fp = sum(r["decoded_id"] is not None for r in fp_rows)
 print(f"\nFALSE POSITIVES: {n_fp} / {len(fp_rows)} un-watermarked images returned a product ID "
-      f"(theory: {blind_false_positive_rate():.1e} per image)")
+      f"(theory: {blind_false_positive_rate():.1e} per read, up to 7 reads per image)")
 
 # ─── CSVs + regression verdict ────────────────────────────────────
 
-for fname, data in [("hidden_v2_quality.csv", quality_rows),
-                    ("hidden_v2_robustness.csv", rows),
-                    ("hidden_v2_false_positives.csv", fp_rows)]:
+for fname, data in [(f"{CSV_PREFIX}_quality.csv", quality_rows),
+                    (f"{CSV_PREFIX}_robustness.csv", rows),
+                    (f"{CSV_PREFIX}_false_positives.csv", fp_rows)]:
     with open(f"output/{fname}", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(data[0].keys()))
         w.writeheader(); w.writerows(data)
@@ -175,6 +186,5 @@ checks = [
 print("\nREGRESSION CHECKS")
 for label, passed in checks:
     print(f"  [{'PASS' if passed else 'FAIL'}] {label}")
-print("\nCSVs: output/hidden_v2_quality.csv, output/hidden_v2_robustness.csv, "
-      "output/hidden_v2_false_positives.csv")
+print(f"\nCSVs: output/{CSV_PREFIX}_quality.csv, _robustness.csv, _false_positives.csv")
 sys.exit(0 if all(p for _, p in checks) else 1)

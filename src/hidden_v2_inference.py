@@ -13,6 +13,10 @@ from src.hidden_v2 import HiDDeNv2
 from src.payload import encode_product_id, decode_payload, PAYLOAD_BITS
 
 
+# Original aspect ratios tried when a suspect looks centre-cropped
+ASPECT_RATIOS = [(4, 3), (3, 4), (3, 2), (2, 3), (16, 9), (9, 16)]
+
+
 class HiddenV2Model:
     def __init__(self, checkpoint_path: str, device: str = "cpu"):
         self.device = device
@@ -42,9 +46,12 @@ class HiddenV2Model:
         Image.fromarray(out.astype(np.uint8)).save(output_path, format="PNG")
 
     @torch.no_grad()
-    def decode_bits(self, image_path: str) -> np.ndarray:
-        logits = self.model.decode(self._load(image_path)).squeeze(0)
+    def _decode_tensor(self, x: torch.Tensor) -> np.ndarray:
+        logits = self.model.decode(x).squeeze(0)
         return (logits > 0).cpu().numpy().astype(np.uint8)
+
+    def decode_bits(self, image_path: str) -> np.ndarray:
+        return self._decode_tensor(self._load(image_path))
 
     # ─── product-ID payload (BCH protected, see src/payload.py) ───
 
@@ -55,7 +62,31 @@ class HiddenV2Model:
         self.embed_bits(image_path, encode_product_id(product_id), output_path, strength)
         return {"product_id": product_id, "output_path": output_path}
 
-    def read_product(self, image_path: str) -> dict:
-        """Blind detection. product_id is None when no valid watermark is found."""
-        bits = self.decode_bits(image_path)
-        return {**decode_payload(bits), "bits": bits}
+    def read_product(self, image_path: str, try_aspects: bool = True) -> dict:
+        """
+        Blind detection. product_id is None when no valid watermark is found.
+
+        The watermark is position-dependent, so a centre crop to another aspect
+        ratio (marketplace thumbnails) misaligns it. If the direct read fails
+        and try_aspects is set, the image is padded back to common original
+        aspect ratios and read again. Each extra attempt is another chance of a
+        false positive: worst case len(ASPECT_RATIOS) + 1 times the single-read rate.
+        """
+        x = self._load(image_path)
+        bits = self._decode_tensor(x)
+        result = {**decode_payload(bits), "bits": bits, "aspect": None}
+        if result["product_id"] is not None or not try_aspects:
+            return result
+        _, _, h, w = x.shape
+        for aw, ah in ASPECT_RATIOS:
+            # Smallest canvas of that aspect ratio that contains the image
+            new_w, new_h = max(w, round(h * aw / ah)), max(h, round(w * ah / aw))
+            if (new_w, new_h) == (w, h):
+                continue
+            canvas = torch.full((1, 3, new_h, new_w), 0.5, device=x.device)
+            top, left = (new_h - h) // 2, (new_w - w) // 2
+            canvas[:, :, top:top + h, left:left + w] = x
+            attempt = decode_payload(self._decode_tensor(canvas))
+            if attempt["product_id"] is not None:
+                return {**attempt, "bits": bits, "aspect": f"{aw}:{ah}"}
+        return result
