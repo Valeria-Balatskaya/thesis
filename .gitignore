@@ -126,3 +126,11 @@ data/div2k/
 data/coco/
 *.pt
 *.pth 
+# Personal test photos (not for the repo)
+data/products/
+data/products_png/
+data/abo_sample/
+data/coco_sample/
+
+# TraceMark app runtime data
+app/data/

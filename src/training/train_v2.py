@@ -99,6 +99,8 @@ def train(
     train_size: int = 256,       # resolution of the "full-size" training images
     target_psnr: float = 40.0,
     start_psnr: float = 30.0,
+    chroma_weight: float = 1.0,
+    mask_floor: float = 1.0,
     batch_size: int = 32,
     total_steps: int = 40000,
     lr: float = 1e-3,
@@ -130,8 +132,8 @@ def train(
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
                             num_workers=num_workers)
 
-    model = HiDDeNv2(msg_len=msg_len, image_size=image_size,
-                     target_psnr=target_psnr).to(device)
+    model = HiDDeNv2(msg_len=msg_len, image_size=image_size, target_psnr=target_psnr,
+                     chroma_weight=chroma_weight, mask_floor=mask_floor).to(device)
     params = list(model.encoder.parameters()) + list(model.decoder.parameters())
     opt = torch.optim.Adam(params, lr=lr)
 
@@ -152,6 +154,8 @@ def train(
             "msg_len": msg_len,
             "image_size": image_size,
             "target_psnr": target_psnr,
+            "chroma_weight": chroma_weight,
+            "mask_floor": mask_floor,
             "best_acc": best_acc,
             **extra,
         }, os.path.join(checkpoint_dir, name))
@@ -213,6 +217,10 @@ if __name__ == "__main__":
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--target-psnr", type=float, default=40.0)
     p.add_argument("--start-psnr", type=float, default=30.0)
+    p.add_argument("--chroma-weight", type=float, default=1.0,
+                   help="colour changes count this many times against the quality budget")
+    p.add_argument("--mask-floor", type=float, default=1.0,
+                   help="watermark amplitude on flat areas (1.0 = no masking)")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--warmup-steps", type=int, default=2000)
     p.add_argument("--ramp-end", type=int, default=15000)
@@ -223,7 +231,8 @@ if __name__ == "__main__":
     p.add_argument("--device", default=None)
     a = p.parse_args()
     train(a.data, total_steps=a.steps, batch_size=a.batch_size,
-          target_psnr=a.target_psnr, start_psnr=a.start_psnr, lr=a.lr, warmup_steps=a.warmup_steps,
+          target_psnr=a.target_psnr, start_psnr=a.start_psnr,
+          chroma_weight=a.chroma_weight, mask_floor=a.mask_floor, lr=a.lr, warmup_steps=a.warmup_steps,
           ramp_end=a.ramp_end, val_every=a.val_every, log_every=a.log_every,
           checkpoint_dir=a.out, resume_from=a.resume, num_workers=a.workers,
           device=a.device)

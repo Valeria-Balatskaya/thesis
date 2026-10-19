@@ -1,0 +1,7 @@
+# Optional: generative-AI attacks in src/modern_attacks.py and the Attack Lab.
+# First use downloads the models (~335 MB VAE, ~176 MB U2-Net).
+diffusers==0.40.0
+accelerate==1.15.0
+safetensors==0.8.0
+rembg==2.0.85
+onnxruntime==1.30.0

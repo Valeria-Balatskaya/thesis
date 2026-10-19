@@ -1,595 +1,397 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Traceability — Watermarking for E-commerce</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root {
-      --bg: #0f1116;
-      --panel: #171a22;
-      --panel-2: #1e222c;
-      --border: #262b36;
-      --text: #e6e8ee;
-      --muted: #8a92a1;
-      --accent: #6ea8ff;
-      --accent-strong: #4a86e8;
-      --success: #4ade80;
-      --danger: #f87171;
-      --warning: #fbbf24;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; padding: 32px 20px; background: var(--bg); color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      line-height: 1.5;
-    }
-    .container { max-width: 1100px; margin: 0 auto; }
-    h1 { margin: 0 0 4px; font-size: 28px; }
-    .subtitle { color: var(--muted); margin-bottom: 24px; }
-
-    .tabs { display: flex; gap: 2px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
-    .tab {
-      padding: 10px 18px; cursor: pointer; color: var(--muted);
-      border-bottom: 2px solid transparent; font-size: 14px; font-weight: 500;
-    }
-    .tab.active { color: var(--text); border-bottom-color: var(--accent); }
-    .panel { display: none; }
-    .panel.active { display: block; }
-
-    .card {
-      background: var(--panel); border: 1px solid var(--border);
-      border-radius: 12px; padding: 24px; margin-bottom: 16px;
-    }
-    .card h2 { margin: 0 0 4px; font-size: 18px; }
-    .card p.hint { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
-
-    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
-    input[type=text], input[type=email], input[type=file], select {
-      width: 100%; padding: 10px 12px; border-radius: 8px;
-      background: #0b0d13; border: 1px solid var(--border);
-      color: var(--text); font-size: 14px; margin-bottom: 12px;
-    }
-    input:focus, select:focus { outline: none; border-color: var(--accent); }
-    button {
-      background: var(--accent-strong); color: white; border: none;
-      padding: 10px 16px; border-radius: 8px; font-size: 14px; font-weight: 600;
-      cursor: pointer; transition: background .15s;
-    }
-    button:hover { background: var(--accent); }
-    button.secondary { background: var(--panel-2); border: 1px solid var(--border); }
-    button.secondary:hover { background: #2a2f3b; }
-    button.danger { background: #331a1a; color: var(--danger); border: 1px solid #4d2626; padding: 4px 10px; font-size: 12px; }
-    button.danger:hover { background: #4d2626; }
-
-    .result {
-      margin-top: 14px; padding: 12px 14px; border-radius: 8px;
-      background: #0b0d13; border: 1px solid var(--border); font-size: 13px;
-    }
-    .result.success { border-color: var(--success); }
-    .result.danger { border-color: var(--danger); }
-    .result.warning { border-color: var(--warning); }
-    .result.hidden { display: none; }
-
-    .seller-select-row { display: flex; gap: 10px; align-items: flex-end; }
-    .seller-select-row select { margin-bottom: 0; }
-
-    .catalog-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: 14px; margin-top: 14px;
-    }
-    .product-card {
-      background: var(--panel-2); border: 1px solid var(--border);
-      border-radius: 10px; overflow: hidden;
-    }
-    .product-card img {
-      width: 100%; aspect-ratio: 1; object-fit: cover; display: block;
-      background: #05070c;
-    }
-    .product-card .meta { padding: 10px; font-size: 13px; }
-    .product-card .title { font-weight: 600; }
-    .product-card .sku { color: var(--muted); font-size: 12px; margin-top: 2px; }
-
-    .ranking-row {
-      display: flex; justify-content: space-between; padding: 6px 0;
-      border-bottom: 1px dashed var(--border); font-size: 13px;
-    }
-    .ranking-row:last-child { border-bottom: none; }
-    .ranking-row .sim { color: var(--muted); }
-    .ranking-row.detected .sim { color: var(--success); font-weight: 600; }
-
-    .url-row {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 8px 12px; margin-bottom: 6px;
-      background: var(--panel-2); border: 1px solid var(--border);
-      border-radius: 6px; font-size: 13px;
-    }
-    .url-row .url-text { flex: 1; word-break: break-all; }
-    .url-row .url-text a { color: var(--accent); text-decoration: none; }
-    .url-row .url-text a:hover { text-decoration: underline; }
-
-    .finding-row {
-      padding: 12px; margin-bottom: 8px;
-      border-left: 3px solid var(--border); border-radius: 4px;
-      background: var(--panel-2); font-size: 13px;
-    }
-    .finding-row.authorized { border-left-color: var(--success); }
-    .finding-row.unauthorized { border-left-color: var(--danger); }
-
-    a { color: var(--accent); }
-    .footer { margin-top: 40px; text-align: center; color: var(--muted); font-size: 12px; }
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    @media (max-width: 760px) { .grid-2 { grid-template-columns: 1fr; } }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraceMark</title>
+<style>
+:root{
+  --bg:#0b0f14; --panel:#121821; --panel2:#18202b; --line:#243040; --text:#e6edf3; --muted:#8b98a8;
+  --accent:#3dd6c4; --accent-ink:#04211d; --ok:#3fb950; --warn:#e3b341; --bad:#f85149; --violet:#a78bfa;
+  --radius:12px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:-.02em} h2{font-size:17px;margin:0 0 12px} h3{font-size:14px;margin:0 0 8px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+p{margin:0 0 12px} .muted{color:var(--muted)} .small{font-size:13px}
+.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh}
+nav{background:var(--panel);border-right:1px solid var(--line);padding:20px 12px;position:sticky;top:0;height:100vh}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;padding:4px 10px 20px}
+.logo svg{width:28px;height:28px}
+nav a{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;color:var(--muted);font-weight:500}
+nav a:hover{background:var(--panel2);color:var(--text);text-decoration:none}
+nav a.on{background:rgba(61,214,196,.12);color:var(--accent)}
+nav .pill{margin-left:auto}
+main{padding:28px 36px 80px;max-width:1280px;width:100%}
+.head{margin-bottom:22px}
+.grid{display:grid;gap:16px} .g2{grid-template-columns:1fr 1fr} .g3{grid-template-columns:repeat(3,1fr)} .g4{grid-template-columns:repeat(4,1fr)}
+.lab{grid-template-columns:340px 1fr;align-items:start}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+.stat b{display:block;font-size:30px;letter-spacing:-.02em;font-variant-numeric:tabular-nums} .stat span{color:var(--muted);font-size:13px}
+.stat.alert b{color:var(--bad)}
+label{display:block;font-size:13px;color:var(--muted);margin:0 0 4px}
+input[type=text],input[type=email],input[type=url],select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 11px;font:inherit}
+input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.field{margin-bottom:12px} .row{display:flex;gap:10px;align-items:end;flex-wrap:wrap} .row>*{flex:1}
+button,.btn{white-space:nowrap;background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer;display:inline-block}
+button:hover,.btn:hover{filter:brightness(1.08);text-decoration:none} button:disabled{opacity:.5;cursor:wait}
+button.ghost,.btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line)} button.ghost:hover{background:var(--panel2)}
+button.danger{background:transparent;color:var(--bad);border:1px solid var(--line)}
+button.sm,.btn.sm{padding:5px 10px;font-size:13px}
+.drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:26px;text-align:center;color:var(--muted);cursor:pointer;background:var(--panel2)}
+.drop.over{border-color:var(--accent);color:var(--accent)} .drop img{max-height:150px;max-width:100%;border-radius:8px;display:block;margin:0 auto 8px}
+.pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;font-weight:600;white-space:nowrap}
+.pill.ok{background:rgba(63,185,80,.15);color:var(--ok)} .pill.bad{background:rgba(248,81,73,.15);color:var(--bad)}
+.pill.warn{background:rgba(227,179,65,.15);color:var(--warn)} .pill.info{background:rgba(61,214,196,.14);color:var(--accent)} .pill.dim{background:var(--panel2);color:var(--muted)}
+table{width:100%;border-collapse:collapse} th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em;padding:8px 10px;border-bottom:1px solid var(--line)}
+td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle} tr:last-child td{border-bottom:0}
+td img.th{width:54px;height:54px;object-fit:cover;border-radius:6px;display:block;background:#000}
+.url{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.cmp{position:relative;border-radius:10px;overflow:hidden;background:#000;user-select:none}
+.cmp img{display:block;width:100%} .cmp .top{position:absolute;inset:0;overflow:hidden;border-right:2px solid var(--accent)}
+.cmp .top img{height:100%;width:auto;max-width:none} .cmp input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:ew-resize;margin:0}
+.cmp .tag{position:absolute;top:10px;background:rgba(0,0,0,.65);padding:2px 8px;border-radius:6px;font-size:12px} .cmp .tag.l{left:10px} .cmp .tag.r{right:10px}
+.bits{display:grid;grid-template-columns:repeat(21,1fr);gap:3px;max-width:520px}
+.bits i{aspect-ratio:1;border-radius:3px;background:var(--panel2);border:1px solid var(--line)}
+.bits i.on.id{background:var(--accent);border-color:var(--accent)} .bits i.on.tag{background:var(--violet);border-color:var(--violet)} .bits i.on.par{background:#5b6b7f;border-color:#5b6b7f}
+.bits i.err{background:var(--bad)!important;border-color:var(--bad)!important}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:8px;flex-wrap:wrap} .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
+.stages{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}
+.stage{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel2);opacity:.45}
+.stage b{display:block;font-size:13px} .stage span{font-size:12px;color:var(--muted)}
+.stage.ran{opacity:1} .stage.pass{border-color:var(--ok)} .stage.pass b{color:var(--ok)} .stage.fail{border-color:var(--bad)} .stage.fail b{color:var(--bad)}
+.verdict{border-radius:var(--radius);padding:14px 16px;font-weight:600;margin-bottom:14px;border:1px solid}
+.verdict small{display:block;font-weight:400;color:var(--muted);margin-top:2px}
+.verdict.good{background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.5)} .verdict.mid{background:rgba(227,179,65,.1);border-color:rgba(227,179,65,.5)}
+.verdict.none{background:var(--panel2);border-color:var(--line)} .verdict.wrong{background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.5)}
+.shots{display:grid;grid-template-columns:repeat(3,1fr);gap:10px} .shots figure{margin:0} .shots img{width:100%;height:210px;object-fit:contain;background:#000;border-radius:8px;border:1px solid var(--line)} .shots figcaption{font-size:12px;color:var(--muted);margin-top:4px}
+.atk{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px} .atk button{background:var(--panel2);color:var(--text);border:1px solid var(--line);font-weight:500;padding:6px 10px;font-size:13px}
+.atk button.on{border-color:var(--accent);color:var(--accent)} .atk button.na{opacity:.4}
+.products{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}
+.product{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;color:var(--text);display:block}
+.product:hover{border-color:var(--accent);text-decoration:none} .product img{width:100%;height:150px;object-fit:cover;display:block;background:#000} .product div{padding:10px 12px}
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:12px} .flow .card{position:relative} .flow .n{font-size:12px;color:var(--accent);font-weight:700}
+#toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--line);padding:10px 16px;border-radius:10px;display:none;z-index:9;max-width:80vw}
+#toast.err{border-color:var(--bad);color:var(--bad)}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:transparent;border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}@keyframes s{to{transform:rotate(360deg)}}
+.empty{text-align:center;color:var(--muted);padding:30px}
+@media(max-width:1000px){.app{grid-template-columns:1fr} nav{position:static;height:auto;display:flex;flex-wrap:wrap;gap:4px} .logo{width:100%;padding-bottom:8px} .g2,.g3,.g4,.lab,.flow,.shots,.stages{grid-template-columns:1fr 1fr} .lab{grid-template-columns:1fr} main{padding:20px 16px 60px}}
+</style>
 </head>
 <body>
-  <div class="container">
-    <h1>Image Traceability Service</h1>
-    <p class="subtitle">
-      Bachelor's thesis prototype — watermarking &amp; steganography for e-commerce.
-      Sellers register catalogs; anyone can scan a suspect image to identify the original product.
-    </p>
-
-    <div class="tabs">
-      <div class="tab active" data-tab="sellers">Sellers</div>
-      <div class="tab" data-tab="catalog">My Catalog</div>
-      <div class="tab" data-tab="scan">Scan Image</div>
-      <div class="tab" data-tab="monitor">Monitor</div>
-    </div>
-
-    <!-- SELLERS TAB -->
-    <div class="panel active" id="panel-sellers">
-      <div class="grid-2">
-        <div class="card">
-          <h2>Create a seller account</h2>
-          <p class="hint">Sellers own catalogs of watermarked products.</p>
-          <label>Email</label>
-          <input id="new-email" type="email" placeholder="shop@example.com" />
-          <label>Business name</label>
-          <input id="new-name" type="text" placeholder="Acme Electronics" />
-          <button id="create-seller-btn">Create seller</button>
-          <div id="create-result" class="result hidden"></div>
-        </div>
-        <div class="card">
-          <h2>Registered sellers</h2>
-          <p class="hint">Live from the backend database.</p>
-          <div id="sellers-table"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- CATALOG TAB -->
-    <div class="panel" id="panel-catalog">
-      <div class="card">
-        <h2>Add a product</h2>
-        <p class="hint">Upload a product image. We embed an invisible ensemble watermark (DCT + HiDDeN) and return the watermarked version to use on your store.</p>
-        <div class="seller-select-row">
-          <div style="flex: 1;">
-            <label>Active seller</label>
-            <select id="catalog-seller"></select>
-          </div>
-          <button class="secondary" id="refresh-catalog-btn">Refresh catalog</button>
-        </div>
-        <label>Product title</label>
-        <input id="prod-title" type="text" placeholder="Vintage leather wallet" />
-        <label>SKU (optional)</label>
-        <input id="prod-sku" type="text" placeholder="WLT-001" />
-        <label>Product image</label>
-        <input id="prod-file" type="file" accept="image/*" />
-        <button id="add-prod-btn">Add &amp; watermark</button>
-        <div id="add-prod-result" class="result hidden"></div>
-      </div>
-      <div class="card">
-        <h2>Catalog</h2>
-        <p class="hint">Watermarked products for the selected seller.</p>
-        <div id="catalog-grid" class="catalog-grid"></div>
-      </div>
-    </div>
-
-    <!-- SCAN TAB -->
-    <div class="panel" id="panel-scan">
-      <div class="card">
-        <h2>Scan a suspect image</h2>
-        <p class="hint">
-          Upload any image (e.g. a screenshot from another site). We check it against every product across every registered seller.
-          <br/><span style="color: var(--warning);">Note: native OS screenshots (Windows Snipping Tool, macOS Cmd+Shift+4) often defeat watermarks due to DPI scaling. Upload the raw file if available.</span>
-        </p>
-        <label>Suspect image</label>
-        <input id="scan-file" type="file" accept="image/*" />
-        <button id="scan-btn">Identify</button>
-        <div id="scan-result" class="result hidden"></div>
-      </div>
-    </div>
-
-    <!-- MONITOR TAB -->
-    <div class="panel" id="panel-monitor">
-      <div class="card">
-        <h2>Product monitoring</h2>
-        <p class="hint">
-          Select one of your registered products, then define the URLs where it's <strong>supposed</strong> to appear
-          (your own store, your Etsy listing, etc). Any match found at an unlisted URL will be flagged as
-          <strong style="color: var(--danger);">unauthorized</strong> — likely stolen.
-        </p>
-        <label>Select product</label>
-        <select id="monitor-product"></select>
-      </div>
-
-      <div class="card">
-        <h2>Authorized locations</h2>
-        <p class="hint">URLs where this product is legitimately hosted.</p>
-        <div style="display: flex; gap: 8px; align-items: flex-end;">
-          <div style="flex: 1;">
-            <label>Add a URL</label>
-            <input id="new-auth-url" type="text" placeholder="https://myshop.com/products/wallet-blue" />
-          </div>
-          <button id="add-url-btn" style="margin-bottom: 12px;">Add</button>
-        </div>
-        <div id="auth-urls-list" style="margin-top: 12px;"></div>
-      </div>
-
-      <div class="card">
-        <h2>Run monitoring scan</h2>
-        <p class="hint">
-          Simulate a reverse-image-search crawler having fetched images from various URLs on the web.
-          Upload the candidate images and provide the URLs they were found at (comma-separated, in order).
-        </p>
-        <label>Suspect images (select multiple)</label>
-        <input id="monitor-files" type="file" accept="image/*" multiple />
-        <label>Source URLs (comma-separated, one per image in the same order)</label>
-        <input id="monitor-urls" type="text" placeholder="https://alibaba-copies.cn/p/123, https://myshop.com/products/wallet-blue, ..." />
-        <button id="monitor-btn">Run scan</button>
-        <div id="monitor-progress" class="result hidden"></div>
-      </div>
-
-      <div id="monitor-results"></div>
-
-      <div class="card">
-        <h2>Historical findings</h2>
-        <p class="hint">All previously-recorded findings for the selected product.</p>
-        <div id="findings-history"></div>
-      </div>
-    </div>
-
-    <div class="footer">
-      Built with FastAPI + Ensemble Watermarking (DCT spread-spectrum + HiDDeN neural)
-    </div>
+<div class="app">
+<nav>
+  <div class="logo">
+    <svg viewBox="0 0 32 32" fill="none"><path d="M16 3l11 4v8c0 7-4.7 11.6-11 14C9.700 26.600 5 22 5 15V7l11-4z" stroke="#3dd6c4" stroke-width="2"/><circle cx="16" cy="15" r="4.500" stroke="#3dd6c4" stroke-width="2"/><path d="M16 6v4M16 20v4M7 15h4M21 15h4" stroke="#3dd6c4" stroke-width="2" stroke-linecap="round"/></svg>
+    TraceMark
   </div>
+  <a href="#/" data-nav="">Overview</a>
+  <a href="#/protect" data-nav="protect">Protect an image</a>
+  <a href="#/catalogue" data-nav="catalogue">Catalogue</a>
+  <a href="#/lab" data-nav="lab">Attack Lab</a>
+  <a href="#/scan" data-nav="scan">Scan a suspect</a>
+  <a href="#/monitor" data-nav="monitor">Web Monitor <span class="pill bad" id="navAlerts" style="display:none"></span></a>
+</nav>
+<main id="view"></main>
+</div>
+<div id="toast"></div>
 
 <script>
-const $ = (id) => document.getElementById(id);
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const view = $('#view');
 
-// ─── Tabs ───────────────────────────────────────────────
-document.querySelectorAll(".tab").forEach(t => {
-  t.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-    document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
-    t.classList.add("active");
-    $("panel-" + t.dataset.tab).classList.add("active");
-    if (t.dataset.tab === "catalog") loadCatalog();
-    if (t.dataset.tab === "sellers") refreshSellers();
-    if (t.dataset.tab === "monitor") loadMonitorProducts();
+function toast(msg, err) {
+  const t = $('#toast'); t.textContent = msg; t.className = err ? 'err' : ''; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', err ? 6000 : 2500);
+}
+async function api(path, opts = {}) {
+  const init = { method: opts.method || (opts.form ? 'POST' : 'GET') };
+  if (opts.form) { const fd = new FormData(); for (const [k, v] of Object.entries(opts.form)) if (v !== null && v !== undefined) fd.append(k, v); init.body = fd; }
+  const res = await fetch(path, init);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { const d = data.detail; throw new Error(typeof d === 'string' ? d : (d && d[0] && d[0].msg) || res.statusText); }
+  return data;
+}
+async function busy(btn, fn) {
+  const label = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>' + btn.textContent;
+  try { return await fn(); } catch (e) { toast(e.message, true); } finally { btn.disabled = false; btn.innerHTML = label; }
+}
+const when = s => s ? new Date(s).toLocaleString([], {dateStyle:'medium', timeStyle:'short'}) : '—';
+
+const VERDICT = {
+  watermark:         ['Traced: watermark read directly', 'good', 'info', 'Watermark'],
+  watermark_aligned: ['Traced: watermark read after alignment', 'good', 'info', 'Watermark (aligned)'],
+  fingerprint_only:  ['Same picture found, but the copy could not be traced', 'mid', 'warn', 'Picture only'],
+  none:              ['No protected image found', 'none', 'dim', 'Nothing'],
+};
+const verdictPill = v => `<span class="pill ${VERDICT[v][2]}">${VERDICT[v][3]}</span>`;
+const authPill = a => a ? '<span class="pill ok">Authorised</span>' : '<span class="pill bad">Unauthorised</span>';
+
+function dropzone(el, onFile) {
+  const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*,.heic,.heif'; input.hidden = true; el.after(input);
+  const set = f => { if (!f) return; el.file = f; const ok = /png|jpe?g|webp|gif/.test(f.type);
+    el.innerHTML = (ok ? `<img src="${URL.createObjectURL(f)}">` : '') + esc(f.name); onFile && onFile(f); };
+  el.onclick = () => input.click(); input.onchange = () => set(input.files[0]);
+  el.ondragover = e => { e.preventDefault(); el.classList.add('over'); }; el.ondragleave = () => el.classList.remove('over');
+  el.ondrop = e => { e.preventDefault(); el.classList.remove('over'); set(e.dataTransfer.files[0]); };
+}
+
+/* 63 payload bits: 20 ID, 10 keyed tag, 33 error-correction */
+function bitGrid(bits, compare) {
+  const cls = i => i < 20 ? 'id' : i < 30 ? 'tag' : 'par';
+  const cells = bits.map((b, i) => `<i class="${cls(i)} ${b ? 'on' : ''} ${compare && compare[i] !== b ? 'err' : ''}" title="bit ${i + 1}"></i>`).join('');
+  const errs = compare ? bits.filter((b, i) => compare[i] !== b).length : null;
+  return `<div class="bits">${cells}</div><div class="legend">
+    <span><i style="background:var(--accent)"></i>copy ID (20)</span><span><i style="background:var(--violet)"></i>keyed check tag (10)</span>
+    <span><i style="background:#5b6b7f"></i>error correction (33)</span>${compare ? `<span><i style="background:var(--bad)"></i>read wrongly: ${errs}</span>` : ''}</div>`;
+}
+
+function stageStrip(stages) {
+  const by = Object.fromEntries(stages.map(s => [s.stage, s]));
+  const blind = by.blind, ret = by.retrieve, ver = by.align_verify;
+  const box = (title, s, text) => `<div class="stage ${s ? 'ran ' + (s.ok ? 'pass' : 'fail') : ''}"><b>${title}</b><span>${text}</span></div>`;
+  return `<div class="stages">
+    ${box('1 · Blind read', blind, blind ? (blind.ok ? `ID read, ${blind.bit_errors} bit errors fixed${blind.aspect ? ', after padding to ' + blind.aspect : ''}` : 'no valid ID in the image as found') : '')}
+    ${box('2 · Retrieve', ret, ret ? (ret.ok ? `${ret.inliers} matching feature points${ret.flipped ? ' (mirrored)' : ''}` : (ret.note || 'no registered picture matches')) : 'not needed')}
+    ${box('3 · Align', ret && ret.ok ? {ok: true} : null, ret && ret.ok ? `covers ${Math.round(ret.coverage * 100)}% of the original, similarity ${ret.similarity.toFixed(2)}` : (ret ? '' : 'not needed'))}
+    ${box('4 · Verify', ver, ver ? (ver.ok ? `${ver.bit_errors} bit errors, ${ver.method === 'bch' ? 'decoded blind' : 'matched to this product (limit ' + ver.limit + ')'}` : 'watermark not readable') : (ret ? '' : 'not needed'))}
+  </div>`;
+}
+
+/* Shared result panel for Attack Lab and Scan */
+function resultPanel(r, ctx = {}) {
+  let [title, kind] = VERDICT[r.verdict];
+  let sub = '';
+  if (r.product) sub = `${esc(r.product.title)} · ${esc(r.product.seller_name)}` + (r.copy ? ` · copy #${r.copy.id} “${esc(r.copy.label)}”` : '');
+  if (ctx.wrong) { title = 'Traced to the WRONG copy'; kind = 'wrong'; }
+  else if (ctx.expected && r.verdict === 'none') title = 'Attack succeeded: the image could not be traced';
+  else if (ctx.expected && r.verdict === 'fingerprint_only' && r.product.id !== ctx.expectedProduct) { title = 'Matched a different registered picture'; kind = 'wrong'; }
+  const shot = (url, cap) => url ? `<figure><a href="${url}" target="_blank"><img src="${url}"></a><figcaption>${cap}</figcaption></figure>` : '';
+  return `<div class="verdict ${kind}">${title}<small>${sub || 'No registered product matches this image.'} · ${r.seconds}s</small></div>
+    ${stageStrip(r.stages)}
+    <div class="shots">${shot(r.suspect_url, ctx.expected ? 'After the attack' : 'Suspect image')}${shot(r.aligned_url, 'Aligned to the original')}${shot(r.product && r.product.original_url, 'Registered original')}</div>
+    ${r.bits ? `<h3 style="margin-top:18px">Bits read from the image</h3>${bitGrid(r.bits, r.expected_bits)}` : ''}
+    ${r.detection_id ? `<p style="margin-top:14px"><a class="btn ghost sm" href="/report/${r.detection_id}" target="_blank">Open evidence report</a></p>` : ''}`;
+}
+
+/* ───────── Overview ───────── */
+async function overview() {
+  const d = await api('/api/overview'); const s = d.stats, m = d.model;
+  view.innerHTML = `<div class="head"><h1>Overview</h1><p class="muted">Every image you publish carries an invisible ID. When a copy turns up somewhere else, TraceMark reads it back and tells you whose image it is and which copy leaked.</p></div>
+  <div class="grid g4" style="margin-bottom:16px">
+    <div class="card stat"><b>${s.products}</b><span>protected products</span></div>
+    <div class="card stat"><b>${s.copies}</b><span>traceable copies issued</span></div>
+    <div class="card stat"><b>${s.watched}</b><span>pages watched</span></div>
+    <div class="card stat ${s.alerts ? 'alert' : ''}"><b>${s.alerts}</b><span>unauthorised sightings (${s.traced} traced to a copy)</span></div>
+  </div>
+  <h3>How an image is traced</h3>
+  <div class="flow" style="margin-bottom:22px">
+    <div class="card"><div class="n">STEP 1</div><b>Blind read</b><p class="muted small">A neural decoder reads ${m.payload_bits} hidden bits straight from the image. No original needed. Survives JPEG, resizing, filters, screenshots.</p></div>
+    <div class="card"><div class="n">STEP 2</div><b>Retrieve</b><p class="muted small">If that fails, the image is matched against your originals by its visual features, even when cropped, rotated or mirrored.</p></div>
+    <div class="card"><div class="n">STEP 3</div><b>Align</b><p class="muted small">The suspect is warped back into the original's frame, undoing crops, perspective and page screenshots.</p></div>
+    <div class="card"><div class="n">STEP 4</div><b>Verify</b><p class="muted small">The watermark is read again from the aligned image and checked against that product's issued copies.</p></div>
+  </div>
+  <div class="grid g2">
+    <div class="card"><h2>Recent sightings</h2>${d.recent.length ? `<table>${d.recent.map(x => `<tr><td><img class="th" src="${x.snapshot_url}"></td><td><b>${esc(x.product_title)}</b><br><span class="muted small url">${esc(x.page_url || 'manual scan')}</span></td><td>${verdictPill(x.verdict)}<br>${authPill(x.authorized)}</td><td><a href="/report/${x.id}" target="_blank">Report</a></td></tr>`).join('')}</table>` : '<div class="empty">Nothing found yet. Protect an image, then try the <a href="#/monitor">Web Monitor</a>.</div>'}</div>
+    <div class="card"><h2>What is embedded</h2>
+      <table><tr><td class="muted">Payload</td><td>${m.payload_bits} bits = ${m.id_bits}-bit copy ID + ${m.tag_bits}-bit keyed tag + error correction</td></tr>
+      <tr><td class="muted">Error correction</td><td>BCH, repairs up to ${m.ecc_t} wrong bits</td></tr>
+      <tr><td class="muted">Image quality</td><td>${m.target_psnr} dB PSNR (fixed budget)</td></tr>
+      <tr><td class="muted">Accidental match</td><td>about ${m.blind_fpr.toExponential(1)} per read (calculated)</td></tr>
+      <tr><td class="muted">AI attacks installed</td><td>${Object.values(m.ai_attacks).every(Boolean) ? 'yes' : 'partly / no'}</td></tr></table>
+      <p class="muted small" style="margin-top:12px">Research prototype. Results come from a limited test set with simulated attacks.</p></div>
+  </div>`;
+  refreshAlerts(s.alerts);
+}
+function refreshAlerts(n) { const el = $('#navAlerts'); el.style.display = n ? '' : 'none'; el.textContent = n; }
+
+/* ───────── Protect ───────── */
+async function protect() {
+  const { sellers } = await api('/api/sellers');
+  view.innerHTML = `<div class="head"><h1>Protect an image</h1><p class="muted">Upload the original. You get back a copy that looks the same and carries an invisible, traceable ID.</p></div>
+  <div class="grid lab"><div class="card">
+    <div class="field"><label>Seller</label><select id="seller">${sellers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('')}<option value="new">+ New seller…</option></select></div>
+    <div id="newSeller" style="display:${sellers.length ? 'none' : 'block'}"><div class="field"><label>Seller name</label><input type="text" id="sName"></div><div class="field"><label>Email</label><input type="email" id="sEmail"></div></div>
+    <div class="field"><label>Product title</label><input type="text" id="title" placeholder="e.g. Galaxy S25, front view"></div>
+    <div class="field"><label>Where it will be published (optional)</label><input type="url" id="auth" placeholder="https://yourshop.com/products"></div>
+    <div class="field"><div class="drop" id="drop">Drop a photo here or click to choose<br><span class="small">PNG, JPG or iPhone HEIC</span></div></div>
+    <button id="go" style="width:100%">Protect image</button>
+  </div><div id="out"><div class="card empty">The protected copy will appear here.</div></div></div>`;
+  const sel = $('#seller'); if (!sellers.length) sel.value = 'new';
+  sel.onchange = () => $('#newSeller').style.display = sel.value === 'new' ? 'block' : 'none';
+  dropzone($('#drop'));
+  $('#go').onclick = e => busy(e.target, async () => {
+    const file = $('#drop').file; if (!file) throw new Error('Choose an image first');
+    let sid = sel.value;
+    if (sid === 'new') sid = (await api('/api/sellers', { form: { name: $('#sName').value, email: $('#sEmail').value } })).seller.id;
+    const { product } = await api('/api/products', { form: { seller_id: sid, title: $('#title').value, authorized_url: $('#auth').value, image: file } });
+    $('#out').innerHTML = protectedCard(product, product.copies[0]); wireCompare($('#out'));
+    toast('Protected. Copy #' + product.copies[0].id + ' issued.');
   });
-});
-
-function showResult(el, cls, html) {
-  el.className = "result " + cls;
-  el.innerHTML = html;
+}
+function protectedCard(p, c) {
+  return `<div class="card">
+    <div class="row" style="margin-bottom:12px;align-items:center"><h2 style="margin:0">${esc(p.title)}</h2>
+      <div style="flex:0;display:flex;gap:8px"><button class="ghost sm" data-reveal>Reveal watermark</button><a class="btn sm" href="${c.url}" download="protected_${c.id}.png">Download</a></div></div>
+    <div class="cmp" data-orig="${p.original_url}" data-wm="${c.url}" data-diff="${c.diff_url}">
+      <img src="${c.url}"><div class="top" style="width:50%"><img src="${p.original_url}"></div>
+      <span class="tag l">Original</span><span class="tag r">Protected</span><input type="range" min="0" max="100" value="50"></div>
+    <p class="muted small" style="margin:8px 0 16px">Drag across the image to compare. “Reveal watermark” shows the difference amplified 30×.</p>
+    <div class="grid g3" style="margin-bottom:16px">
+      <div class="stat"><b>${c.psnr.toFixed(1)} dB</b><span>PSNR (higher = closer to the original)</span></div>
+      <div class="stat"><b>${c.ssim.toFixed(4)}</b><span>SSIM (1 = identical structure)</span></div>
+      <div class="stat"><b>#${c.id}</b><span>copy ID · “${esc(c.label)}”</span></div></div>
+    <h3>The 63 bits hidden in this copy</h3>${bitGrid(c.payload_bits)}
+    <p style="margin-top:16px"><a class="btn ghost sm" href="#/lab?copy=${c.id}">Attack this copy in the lab</a> <a class="btn ghost sm" href="#/product/${p.id}">Manage product</a></p></div>`;
+}
+function wireCompare(root) {
+  root.querySelectorAll('.cmp').forEach(cmp => {
+    const top = $('.top', cmp), topImg = $('.top img', cmp), base = cmp.querySelector(':scope > img');
+    const fit = () => topImg.style.width = cmp.clientWidth + 'px';
+    base.onload = fit; fit(); window.addEventListener('resize', fit);
+    $('input', cmp).oninput = e => top.style.width = e.target.value + '%';
+  });
+  root.querySelectorAll('[data-reveal]').forEach(btn => btn.onclick = () => {
+    const cmp = btn.closest('.card').querySelector('.cmp'), base = cmp.querySelector(':scope > img'), on = btn.classList.toggle('on');
+    base.src = on ? cmp.dataset.diff : cmp.dataset.wm; $('.tag.r', cmp).textContent = on ? 'Watermark ×30' : 'Protected'; btn.textContent = on ? 'Hide watermark' : 'Reveal watermark';
+  });
 }
 
-// ─── Sellers ────────────────────────────────────────────
-async function refreshSellers() {
-  const r = await fetch("/api/sellers");
-  const j = await r.json();
-  const rows = j.sellers.map(s =>
-    `<div class="ranking-row">
-       <span><strong>${s.business_name}</strong>
-         <span style="color: var(--muted);"> — ${s.email}</span></span>
-       <span class="sim">${s.product_count} product${s.product_count === 1 ? '' : 's'}</span>
-     </div>`
-  ).join("") || `<div style="color: var(--muted);">No sellers yet.</div>`;
-  $("sellers-table").innerHTML = rows;
-  const sel = $("catalog-seller");
-  const prevValue = sel.value;
-  sel.innerHTML = j.sellers.length
-    ? j.sellers.map(s => `<option value="${s.id}">${s.business_name} (${s.email})</option>`).join("")
-    : `<option value="">— no sellers registered yet —</option>`;
-  if (prevValue) sel.value = prevValue;
+/* ───────── Catalogue + product ───────── */
+async function catalogue() {
+  const { products } = await api('/api/products');
+  view.innerHTML = `<div class="head"><h1>Catalogue</h1><p class="muted">${products.length} protected product${products.length === 1 ? '' : 's'}.</p></div>
+  ${products.length ? `<div class="products">${products.map(p => `<a class="product" href="#/product/${p.id}"><img src="${p.thumb_url}"><div><b>${esc(p.title)}</b><br><span class="muted small">${esc(p.seller_name)} · ${p.copies.length} cop${p.copies.length === 1 ? 'y' : 'ies'}</span> ${p.alerts ? `<span class="pill bad">${p.alerts} alert${p.alerts > 1 ? 's' : ''}</span>` : ''}</div></a>`).join('')}</div>` : '<div class="card empty">No products yet. <a href="#/protect">Protect your first image</a>.</div>'}`;
+}
+async function productPage(id) {
+  const { product: p } = await api('/api/products/' + id);
+  view.innerHTML = `<div class="head"><a href="#/catalogue" class="small">← Catalogue</a><h1>${esc(p.title)}</h1><p class="muted">${esc(p.seller_name)} · ${p.width}×${p.height} · protected ${when(p.created_at)}</p></div>
+  <div class="grid g2" style="align-items:start"><div>${protectedCard(p, p.copies[0])}</div><div class="grid">
+    <div class="card"><h2>Traceable copies</h2><p class="muted small">Give each partner or channel its own copy. If one leaks, the ID tells you which.</p>
+      <table><tr><th>ID</th><th>Issued to</th><th>PSNR</th><th></th></tr>${p.copies.map(c => `<tr><td>#${c.id}</td><td>${esc(c.label)}</td><td>${c.psnr.toFixed(1)} dB</td><td style="text-align:right"><a href="${c.url}" download="protected_${c.id}.png">Download</a> · <a href="#/lab?copy=${c.id}">Attack</a></td></tr>`).join('')}</table>
+      <div class="row" style="margin-top:12px"><input type="text" id="copyLabel" placeholder="e.g. Reseller: GadgetHub"><button id="addCopy" style="flex:0;white-space:nowrap">Issue copy</button></div></div>
+    <div class="card"><h2>Authorised locations</h2><p class="muted small">Sightings on these sites are expected. Anything else is flagged.</p>
+      ${p.authorized_urls.map(u => `<div class="row" style="margin-bottom:6px;align-items:center"><span class="url">${esc(u.url)}</span><button class="danger sm" style="flex:0" data-delurl="${u.id}">Remove</button></div>`).join('') || '<p class="muted small">None yet.</p>'}
+      <div class="row" style="margin-top:12px"><input type="url" id="newUrl" placeholder="https://yourshop.com/products"><button id="addUrl" style="flex:0">Add</button></div></div>
+    <div class="card"><h2>Sightings</h2>${p.detections.length ? `<table>${p.detections.map(d => `<tr><td><img class="th" src="${d.snapshot_url}"></td><td><span class="url small">${esc(d.page_url || 'manual scan')}</span>${d.copy_label ? `<span class="small muted">copy “${esc(d.copy_label)}”</span>` : ''}</td><td>${verdictPill(d.verdict)} ${authPill(d.authorized)}</td><td><a href="/report/${d.id}" target="_blank">Report</a></td></tr>`).join('')}</table>` : '<p class="muted small">Not seen anywhere yet.</p>'}</div>
+    <div><button class="danger" id="delProduct">Delete product</button></div>
+  </div></div>`;
+  wireCompare(view);
+  $('#addCopy').onclick = e => busy(e.target, async () => { await api(`/api/products/${id}/copies`, { form: { label: $('#copyLabel').value } }); toast('Copy issued'); productPage(id); });
+  $('#addUrl').onclick = e => busy(e.target, async () => { await api(`/api/products/${id}/urls`, { form: { url: $('#newUrl').value } }); productPage(id); });
+  view.querySelectorAll('[data-delurl]').forEach(b => b.onclick = async () => { await api('/api/urls/' + b.dataset.delurl, { method: 'DELETE' }); productPage(id); });
+  $('#delProduct').onclick = async () => { if (!confirm('Delete this product, its copies and its sightings?')) return; await api('/api/products/' + id, { method: 'DELETE' }); location.hash = '#/catalogue'; };
 }
 
-$("create-seller-btn").addEventListener("click", async () => {
-  const email = $("new-email").value.trim();
-  const name  = $("new-name").value.trim();
-  const el = $("create-result");
-  if (!email || !name) { showResult(el, "danger", "Both fields are required."); return; }
-  const fd = new FormData();
-  fd.append("email", email);
-  fd.append("business_name", name);
-  const r = await fetch("/api/sellers", { method: "POST", body: fd });
-  const j = await r.json();
-  if (!r.ok) { showResult(el, "danger", j.detail || "Failed."); return; }
-  showResult(el, "success", `✓ Created <strong>${j.seller.business_name}</strong> (id=${j.seller.id}).`);
-  $("new-email").value = "";
-  $("new-name").value = "";
-  refreshSellers();
-});
-
-// ─── Catalog ────────────────────────────────────────────
-async function loadCatalog() {
-  const sellerId = $("catalog-seller").value;
-  if (!sellerId) { $("catalog-grid").innerHTML = ""; return; }
-  const r = await fetch(`/api/sellers/${sellerId}/products`);
-  const j = await r.json();
-  if (!j.products || j.products.length === 0) {
-    $("catalog-grid").innerHTML = `<div style="color: var(--muted);">No products yet.</div>`;
-    return;
-  }
-  $("catalog-grid").innerHTML = j.products.map(p => {
-    const name = p.watermarked_path.split(/[\\/]/).pop();
-    return `
-      <div class="product-card">
-        <img src="/api/watermarked/${name}" alt="${p.title}" />
-        <div class="meta">
-          <div class="title">${p.title}</div>
-          <div class="sku">${p.sku || '—'} · id ${p.id}</div>
-        </div>
-      </div>`;
-  }).join("");
-}
-$("refresh-catalog-btn").addEventListener("click", loadCatalog);
-$("catalog-seller").addEventListener("change", loadCatalog);
-
-$("add-prod-btn").addEventListener("click", async () => {
-  const sellerId = $("catalog-seller").value;
-  const title = $("prod-title").value.trim();
-  const sku   = $("prod-sku").value.trim();
-  const file  = $("prod-file").files[0];
-  const el = $("add-prod-result");
-  if (!sellerId) { showResult(el, "danger", "Create a seller first."); return; }
-  if (!title || !file) { showResult(el, "danger", "Title and image are required."); return; }
-  const fd = new FormData();
-  fd.append("title", title);
-  fd.append("sku", sku);
-  fd.append("image", file);
-  showResult(el, "", "Embedding watermark…");
-  const r = await fetch(`/api/sellers/${sellerId}/products`, { method: "POST", body: fd });
-  const j = await r.json();
-  if (!r.ok) { showResult(el, "danger", j.detail || "Failed."); return; }
-  showResult(el, "success",
-    `✓ Added <strong>${j.product.title}</strong> (id=${j.product.id}). ` +
-    `<a href="${j.download_url}" download>Download watermarked image</a>`);
-  $("prod-title").value = "";
-  $("prod-sku").value = "";
-  $("prod-file").value = "";
-  loadCatalog();
-});
-
-// ─── Scan ───────────────────────────────────────────────
-$("scan-btn").addEventListener("click", async () => {
-  const file = $("scan-file").files[0];
-  const el = $("scan-result");
-  if (!file) { showResult(el, "danger", "Please choose an image."); return; }
-  const fd = new FormData();
-  fd.append("image", file);
-  showResult(el, "", "Scanning across all products…");
-  const r = await fetch("/api/scan", { method: "POST", body: fd });
-  const j = await r.json();
-  if (!r.ok) { showResult(el, "danger", j.detail || "Failed."); return; }
-  if (j.match) {
-    showResult(el, "success", `
-      <div style="font-size: 15px;">✓ Match found</div>
-      <div style="margin-top: 6px;">
-        <strong>${j.match.product_title}</strong> (product id ${j.match.product_id})
-        <br/><span style="color: var(--muted);">Seller: ${j.match.seller_name}</span>
-        <br/><span style="color: var(--muted);">
-          Detected via <strong style="color: var(--accent);">${j.match.winning_detector.toUpperCase()}</strong>
-          — DCT similarity ${j.match.dct_sim.toFixed(2)}, HiDDeN BER ${j.match.hidden_ber.toFixed(3)}
-        </span>
-      </div>
-      <div style="margin-top: 12px; font-size: 12px; color: var(--muted);">Top candidates:</div>
-      ${j.ranking.map(s => `
-        <div class="ranking-row ${s.detected ? 'detected' : ''}">
-          <span>${s.product_title || 'unknown'} <span style="color: var(--muted);">— ${s.seller_name || ''}</span></span>
-          <span class="sim">dct ${s.dct_sim.toFixed(1)} · ber ${s.hidden_ber.toFixed(2)}</span>
-        </div>`).join("")}
-    `);
-  } else {
-    showResult(el, "danger", `
-      <div>✗ No product matched above threshold.</div>
-      <div style="margin-top: 6px; color: var(--muted);">Top candidates:</div>
-      ${j.ranking.map(s => `
-        <div class="ranking-row">
-          <span>${s.product_title || 'unknown'} <span style="color: var(--muted);">— ${s.seller_name || ''}</span></span>
-          <span class="sim">dct ${s.dct_sim.toFixed(1)} · ber ${s.hidden_ber.toFixed(2)}</span>
-        </div>`).join("")}
-    `);
-  }
-});
-
-// ─── Monitor ────────────────────────────────────────────
-
-async function loadMonitorProducts() {
-  // Populate product dropdown with ALL products across ALL sellers
-  const sellersRes = await fetch("/api/sellers");
-  const sellers = (await sellersRes.json()).sellers;
-  const options = [];
-  for (const s of sellers) {
-    const r = await fetch(`/api/sellers/${s.id}/products`);
-    const j = await r.json();
-    for (const p of j.products) {
-      options.push(`<option value="${p.id}">${p.title} (id ${p.id}) — ${s.business_name}</option>`);
-    }
-  }
-  const sel = $("monitor-product");
-  const prev = sel.value;
-  sel.innerHTML = options.length
-    ? options.join("")
-    : `<option value="">— no products registered yet —</option>`;
-  if (prev) sel.value = prev;
-  if (sel.value) {
-    loadAuthorizedUrls();
-    loadFindingsHistory();
-  }
+/* ───────── Attack Lab ───────── */
+async function lab(params) {
+  const [{ products }, { attacks }] = await Promise.all([api('/api/products'), api('/api/lab/attacks')]);
+  if (!products.length) { view.innerHTML = `<div class="head"><h1>Attack Lab</h1></div><div class="card empty">Protect an image first, then come back to try to break it.</div>`; return; }
+  const groups = [...new Set(attacks.map(a => a.group))];
+  const state = { attack: attacks[0], last: null };
+  view.innerHTML = `<div class="head"><h1>Attack Lab</h1><p class="muted">Play the thief. Pick a protected copy, do to it what image thieves do, and see whether it can still be traced.</p></div>
+  <div class="grid lab"><div class="card">
+    <div class="field"><label>Protected copy</label><select id="copy">${products.map(p => p.copies.map(c => `<option value="${c.id}">${esc(p.title)} · #${c.id} ${esc(c.label)}</option>`).join('')).join('')}</select></div>
+    ${groups.map(g => `<h3>${g}</h3><div class="atk">${attacks.filter(a => a.group === g).map(a => `<button data-a="${a.name}" class="${a.available ? '' : 'na'}" title="${a.available ? '' : 'optional package not installed'}">${esc(a.label)}</button>`).join('')}</div>`).join('')}
+    <div class="field" id="sliderBox"></div>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin-bottom:12px"><input type="checkbox" id="stack"> Apply on top of the previous result</label>
+    <div class="row"><button id="run">Run attack</button><button class="ghost" id="all">Run all</button></div>
+  </div><div id="out"><div class="card empty">Choose an attack and run it.</div></div></div>`;
+  if (params.get('copy')) $('#copy').value = params.get('copy');
+  const pick = name => {
+    state.attack = attacks.find(a => a.name === name);
+    view.querySelectorAll('[data-a]').forEach(b => b.classList.toggle('on', b.dataset.a === name));
+    const s = state.attack.slider;
+    $('#sliderBox').innerHTML = s ? `<label>${s.param}: <b id="sv">${s.default}</b></label><input type="range" id="slider" min="${s.min}" max="${s.max}" step="${s.step}" value="${s.default}" style="width:100%">` : '';
+    if (s) $('#slider').oninput = e => $('#sv').textContent = e.target.value;
+  };
+  view.querySelectorAll('[data-a]').forEach(b => b.onclick = () => pick(b.dataset.a));
+  pick(attacks.some(a => a.name === params.get('attack')) ? params.get('attack') : state.attack.name);
+  $('#copy').onchange = () => { state.last = null; $('#stack').checked = false; };
+  const run = (a, value, stacked) => api('/api/lab/run', { form: { copy_id: $('#copy').value, attack: a.name, value, stacked_on: stacked || '' } });
+  $('#run').onclick = e => busy(e.target, async () => {
+    const stacked = $('#stack').checked && state.last ? state.last : '';
+    const d = await run(state.attack, $('#slider') ? $('#slider').value : null, stacked);
+    state.last = d.attacked_url;
+    $('#out').innerHTML = `<div class="card"><h2>${esc(d.attack)}${stacked ? ' <span class="pill dim">stacked</span>' : ''}</h2>${resultPanel(d.result, { expected: true, wrong: d.wrong, expectedProduct: d.expected_product_id })}</div>`;
+  });
+  $('#all').onclick = e => busy(e.target, async () => {
+    const list = attacks.filter(a => a.available); const rows = [];
+    const draw = done => $('#out').innerHTML = `<div class="card"><h2>All attacks ${done ? '' : `<span class="muted small">(${rows.length}/${list.length})</span>`}</h2>
+      <p class="muted small">${rows.filter(r => r.traced).length} of ${rows.length} traced to the right copy${rows.some(r => r.wrong) ? ` · <span style="color:var(--bad)">${rows.filter(r => r.wrong).length} wrong</span>` : ''}.</p>
+      <table><tr><th>Attack</th><th>Outcome</th><th>How</th><th>Time</th></tr>${rows.map(r => `<tr><td>${esc(r.attack)}</td><td>${r.wrong ? '<span class="pill bad">Wrong copy</span>' : r.traced ? '<span class="pill ok">Traced</span>' : r.result.verdict === 'fingerprint_only' ? '<span class="pill warn">Picture only</span>' : '<span class="pill bad">Lost</span>'}</td><td class="muted small">${r.result.verdict === 'watermark' ? 'blind read' : r.result.verdict === 'watermark_aligned' ? 'retrieve → align → verify' : r.result.verdict === 'fingerprint_only' ? 'visual match, watermark unreadable' : '—'}</td><td class="muted small">${r.result.seconds}s</td></tr>`).join('')}</table></div>`;
+    for (const a of list) { rows.push(await run(a, a.slider ? a.slider.default : null, '')); draw(false); }
+    draw(true);
+  });
+  if (params.get('run')) $('#run').click();   // deep link: #/lab?copy=ID&attack=NAME&run=1
 }
 
-$("monitor-product").addEventListener("change", () => {
-  loadAuthorizedUrls();
-  loadFindingsHistory();
-});
-
-async function loadAuthorizedUrls() {
-  const pid = $("monitor-product").value;
-  if (!pid) { $("auth-urls-list").innerHTML = ""; return; }
-  const r = await fetch(`/api/products/${pid}/urls`);
-  const j = await r.json();
-  if (!j.urls || j.urls.length === 0) {
-    $("auth-urls-list").innerHTML = `<div style="color: var(--muted); font-size: 13px;">
-      No authorized URLs yet. Add one to enable authorized/unauthorized classification.
-    </div>`;
-    return;
-  }
-  $("auth-urls-list").innerHTML = j.urls.map(u => `
-    <div class="url-row">
-      <span class="url-text"><a href="${u.url}" target="_blank" rel="noopener">${u.url}</a></span>
-      <button class="danger" onclick="deleteAuthUrl(${u.id})">Remove</button>
-    </div>
-  `).join("");
+/* ───────── Scan ───────── */
+function scan() {
+  view.innerHTML = `<div class="head"><h1>Scan a suspect image</h1><p class="muted">Found an image somewhere that looks like yours? Drop it here to check whether it comes from a protected copy.</p></div>
+  <div class="grid lab"><div class="card">
+    <div class="field"><div class="drop" id="drop">Drop the suspect image or click to choose</div></div>
+    <div class="field"><label>Where you found it (optional)</label><input type="url" id="page" placeholder="https://some-shop.example/item/123"></div>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin-bottom:12px"><input type="checkbox" id="rec" checked> Save to the sightings log (creates an evidence report)</label>
+    <button id="go" style="width:100%">Scan</button></div>
+  <div id="out"><div class="card empty">The result will appear here.</div></div></div>`;
+  dropzone($('#drop'));
+  $('#go').onclick = e => busy(e.target, async () => {
+    const file = $('#drop').file; if (!file) throw new Error('Choose an image first');
+    const { result } = await api('/api/scan', { form: { image: file, page_url: $('#page').value, record: $('#rec').checked } });
+    $('#out').innerHTML = `<div class="card">${result.product ? `<p>${authPill(result.authorized)} <span class="muted small">${$('#page').value ? 'based on the address you gave' : 'no address given, so it cannot be an authorised location'}</span></p>` : ''}${resultPanel(result)}</div>`;
+  });
 }
 
-async function deleteAuthUrl(urlId) {
-  await fetch(`/api/products/urls/${urlId}`, { method: "DELETE" });
-  loadAuthorizedUrls();
+/* ───────── Web Monitor ───────── */
+async function monitor() {
+  const [{ watch, schedule }, { detections }] = await Promise.all([api('/api/watch'), api('/api/detections')]);
+  const alerts = detections.filter(d => !d.authorized).length; refreshAlerts(alerts);
+  view.innerHTML = `<div class="head"><h1>Web Monitor</h1><p class="muted">TraceMark visits the pages on your watchlist, downloads every image on them and checks each one against your protected catalogue.</p></div>
+  <div class="grid g2" style="align-items:start;margin-bottom:16px">
+    <div class="card"><h2>Watchlist</h2>
+      ${watch.length ? `<table>${watch.map(w => `<tr><td><a class="url" href="${esc(w.url)}" target="_blank">${esc(w.label || w.url)}</a><span class="muted small">${w.last_crawled_at ? when(w.last_crawled_at) + ' · ' + esc(w.last_status) : 'never checked'}</span></td><td style="text-align:right;white-space:nowrap"><button class="ghost sm" data-crawl="${esc(w.url)}">Check</button> <button class="danger sm" data-delwatch="${w.id}">Remove</button></td></tr>`).join('')}</table>` : '<p class="muted small">No pages yet. Add a marketplace listing, a competitor’s shop page, or build the demo shop.</p>'}
+      <div class="row" style="margin-top:12px"><input type="url" id="wUrl" placeholder="https://marketplace.example/search?q=your+product"><button id="addWatch" style="flex:0">Watch</button></div>
+      <div class="row" style="margin-top:12px;align-items:center"><button id="crawlAll" ${watch.length ? '' : 'disabled'}>Check all now</button>
+        <div><select id="sched">${[[0, 'Automatic checks: off'], [5, 'Every 5 minutes'], [15, 'Every 15 minutes'], [60, 'Every hour'], [1440, 'Every day']].map(([v, t]) => `<option value="${v}" ${schedule.minutes == v ? 'selected' : ''}>${t}</option>`).join('')}</select></div></div></div>
+    <div class="card"><h2>Try it: a demo thief shop</h2>
+      <p class="muted small">Builds a fake marketplace page, served by this app, containing stolen copies of your products (cropped, compressed, mirrored, screenshotted, with banners) mixed with unrelated images. It is added to the watchlist so you can watch the monitor find them.</p>
+      <div class="row"><button id="demo" class="ghost">Build demo shop</button><a class="btn ghost" href="/demo/shop" target="_blank" style="text-align:center">Open the shop</a></div>
+      <h3 style="margin-top:18px">What this does not do yet</h3>
+      <p class="muted small" style="margin:0">It checks pages you list. Finding copies on pages you don’t know about needs a reverse-image-search service (Google Vision, TinEye, Bing); their result links can be added to this watchlist.</p></div>
+  </div>
+  <div class="card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 style="margin:0">Sightings <span class="muted small">${detections.length} total · ${alerts} unauthorised</span></h2><button class="ghost sm" id="clear" style="flex:0">Clear log</button></div>
+    ${detections.length ? `<table><tr><th></th><th>Product</th><th>Leaked copy</th><th>Found at</th><th>Evidence</th><th>Status</th><th>Seen</th><th></th></tr>${detections.map(d => `<tr>
+      <td><a href="${d.snapshot_url}" target="_blank"><img class="th" src="${d.snapshot_url}"></a></td>
+      <td><a href="#/product/${d.product_id}"><b>${esc(d.product_title)}</b></a><br><span class="muted small">${esc(d.seller_name)}</span></td>
+      <td>${d.copy_id ? `#${d.copy_id}<br><span class="muted small">${esc(d.copy_label)}</span>` : '<span class="muted">unknown</span>'}</td>
+      <td><span class="url small">${esc(d.page_url || 'manual scan')}</span></td>
+      <td>${verdictPill(d.verdict)}</td><td>${authPill(d.authorized)}</td>
+      <td class="muted small">${when(d.last_seen)}${d.times_seen > 1 ? `<br>${d.times_seen}×` : ''}</td>
+      <td><a href="/report/${d.id}" target="_blank">Report</a></td></tr>`).join('')}</table>` : '<div class="empty">No sightings yet.</div>'}</div>`;
+  const summarise = results => results.map(r => r.error ? `${r.page_url}: ${r.error}` : `${r.scanned} images checked, ${r.matches.length} yours, ${r.matches.filter(m => !m.authorized).length} unauthorised`).join(' · ');
+  $('#addWatch').onclick = e => busy(e.target, async () => { await api('/api/watch', { form: { url: $('#wUrl').value } }); monitor(); });
+  $('#crawlAll').onclick = e => busy(e.target, async () => { const { results } = await api('/api/watch/crawl', { form: { url: '' } }); await monitor(); toast(summarise(results) || 'Nothing to check'); });
+  view.querySelectorAll('[data-crawl]').forEach(b => b.onclick = e => busy(e.target, async () => { const { results } = await api('/api/watch/crawl', { form: { url: b.dataset.crawl } }); await monitor(); toast(summarise(results), !!results[0].error); }));
+  view.querySelectorAll('[data-delwatch]').forEach(b => b.onclick = async () => { await api('/api/watch/' + b.dataset.delwatch, { method: 'DELETE' }); monitor(); });
+  $('#sched').onchange = async e => { await api('/api/monitor/schedule', { form: { minutes: e.target.value } }); toast('Schedule saved'); };
+  $('#demo').onclick = e => busy(e.target, async () => { const d = await api('/api/demo/build', { method: 'POST' }); await monitor(); toast(`Demo shop built with ${d.images} images. Now click “Check all now”.`); });
+  $('#clear').onclick = async () => { if (!confirm('Clear the sightings log?')) return; await api('/api/detections', { method: 'DELETE' }); monitor(); };
 }
 
-$("add-url-btn").addEventListener("click", async () => {
-  const pid = $("monitor-product").value;
-  const url = $("new-auth-url").value.trim();
-  if (!pid) { alert("Select a product first."); return; }
-  if (!url) { alert("URL cannot be empty."); return; }
-  const fd = new FormData();
-  fd.append("url", url);
-  const r = await fetch(`/api/products/${pid}/urls`, { method: "POST", body: fd });
-  if (r.ok) {
-    $("new-auth-url").value = "";
-    loadAuthorizedUrls();
-  }
-});
-
-async function loadFindingsHistory() {
-  const pid = $("monitor-product").value;
-  if (!pid) { $("findings-history").innerHTML = ""; return; }
-  const r = await fetch(`/api/products/${pid}/findings`);
-  const j = await r.json();
-  if (!j.findings || j.findings.length === 0) {
-    $("findings-history").innerHTML = `<div style="color: var(--muted); font-size: 13px;">No findings recorded yet.</div>`;
-    return;
-  }
-  $("findings-history").innerHTML = j.findings.map(f => `
-    <div class="finding-row ${f.authorized ? 'authorized' : 'unauthorized'}">
-      <div>
-        <strong style="color: ${f.authorized ? 'var(--success)' : 'var(--danger)'};">
-          ${f.authorized ? '✓ Authorized' : '⚠ UNAUTHORIZED'}
-        </strong>
-        · <span style="color: var(--muted);">${f.found_at.slice(0, 19).replace('T', ' ')} UTC</span>
-      </div>
-      <div style="margin-top: 4px;">Found at: <a href="${f.source_url}" target="_blank" rel="noopener">${f.source_url}</a></div>
-      <div style="color: var(--muted); font-size: 12px; margin-top: 2px;">
-        File: ${f.source_file || '—'} · via ${f.detector} · conf ${f.confidence.toFixed(2)}
-      </div>
-    </div>
-  `).join("");
-}
-
-$("monitor-btn").addEventListener("click", async () => {
-  const files = $("monitor-files").files;
-  const urls  = $("monitor-urls").value;
-  const progress = $("monitor-progress");
-  const results  = $("monitor-results");
-  results.innerHTML = "";
-
-  if (!files || files.length === 0) {
-    progress.className = "result show danger";
-    progress.textContent = "Please select at least one image to scan.";
-    return;
-  }
-
-  progress.className = "result show";
-  progress.textContent = `Scanning ${files.length} image${files.length === 1 ? "" : "s"}... (~${(files.length * 0.5).toFixed(0)}s)`;
-
-  const fd = new FormData();
-  for (const f of files) fd.append("images", f);
-  if (urls.trim()) fd.append("source_urls", urls);
-
+/* ───────── Router ───────── */
+async function route() {
+  const [path, query] = (location.hash.slice(2) || '').split('?');
+  const [name, arg] = path.split('/');
+  document.querySelectorAll('nav a').forEach(a => a.classList.toggle('on', a.dataset.nav === (name === 'product' ? 'catalogue' : name)));
+  view.innerHTML = '<div class="empty"><span class="spin"></span>Loading…</div>';
   try {
-    const r = await fetch("/api/monitor/scan", { method: "POST", body: fd });
-    const j = await r.json();
-    if (!r.ok) {
-      progress.className = "result show danger";
-      progress.textContent = j.detail || "Scan failed.";
-      return;
-    }
-    progress.className = "result show success";
-    progress.innerHTML = `
-      <strong>Scan complete.</strong>
-      Checked ${j.scanned} images.
-      Found ${j.authorized.length} authorized match${j.authorized.length === 1 ? '' : 'es'},
-      <strong style="color: var(--danger);">${j.unauthorized.length} UNAUTHORIZED</strong>.
-    `;
-
-    let html = "";
-    if (j.unauthorized.length > 0) {
-      html += `
-        <div class="card" style="border-color: var(--danger);">
-          <h2 style="color: var(--danger);">⚠ Unauthorized matches — likely stolen</h2>
-          <p class="hint">These images were found at URLs NOT on your authorized list.</p>
-          ${j.unauthorized.map(f => `
-            <div class="finding-row unauthorized">
-              <div><strong>${f.match.product_title}</strong> found at:
-                <a href="${f.source_url}" target="_blank" rel="noopener">${f.source_url}</a>
-              </div>
-              <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">
-                File: ${f.source_file} · detected via ${f.match.winning_detector}
-                · DCT sim ${f.match.dct_sim.toFixed(1)} · HiDDeN BER ${f.match.hidden_ber.toFixed(2)}
-              </div>
-            </div>
-          `).join("")}
-        </div>
-      `;
-    }
-    if (j.authorized.length > 0) {
-      html += `
-        <div class="card" style="border-color: var(--success);">
-          <h2 style="color: var(--success);">✓ Authorized matches</h2>
-          <p class="hint">Images found at URLs on your authorized list — expected.</p>
-          ${j.authorized.map(f => `
-            <div class="finding-row authorized">
-              <div><strong>${f.match.product_title}</strong> found at:
-                <a href="${f.source_url}" target="_blank" rel="noopener">${f.source_url}</a>
-              </div>
-              <div style="color: var(--muted); font-size: 12px; margin-top: 4px;">
-                File: ${f.source_file} · detected via ${f.match.winning_detector}
-              </div>
-            </div>
-          `).join("")}
-        </div>
-      `;
-    }
-    if (j.matches_found === 0) {
-      html = `
-        <div class="card" style="border-color: var(--muted);">
-          No matches. None of the scanned images appear to be watermarked
-          versions of your registered products.
-        </div>
-      `;
-    }
-    results.innerHTML = html;
-    loadFindingsHistory();
-  } catch (e) {
-    progress.className = "result show danger";
-    progress.textContent = "Network error: " + e.message;
-  }
-});
-
-refreshSellers();
+    await ({ '': overview, protect, catalogue, product: () => productPage(arg), lab: () => lab(new URLSearchParams(query || '')), scan, monitor }[name] || overview)();
+  } catch (e) { view.innerHTML = `<div class="card"><h2>Something went wrong</h2><p class="muted">${esc(e.message)}</p></div>`; }
+}
+window.addEventListener('hashchange', route); route();
 </script>
 </body>
 </html>
