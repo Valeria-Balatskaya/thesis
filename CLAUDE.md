@@ -30,13 +30,15 @@ AI edits) back to the seller/product it came from. The author develops on a Mac
   UN-watermarked original) -> 4 read again; with one candidate product the bits may
   also be matched to its known codewords (<= ~11 errors at FPR 1e-6 instead of BCH's 6).
   Verdicts: `watermark`, `watermark_aligned`, `fingerprint_only`, `none`.
+  `informed_score()` = non-blind check for one copy's exact residual (ownership disputes)
   A product has several *copies*, each with its own watermark ID (leak tracing)
 - `src/modern_attacks.py` — off-centre crop, rotate, mirror, perspective, page
   screenshot, phone photo of screen, messenger recompress, promo overlay, inpaint,
   upscale; AI: `regenerate_vae` (SD VAE), `replace_background` (rembg) — optional,
   `pip install -r requirements-ai.txt`
 - `app/` — **TraceMark** web app (FastAPI + SQLite, single-page UI in `app/static/index.html`):
-  `main.py` routes, `guard.py` service (protect / analyse / attack lab, `STRENGTH = 0.5`),
+  `main.py` routes, `guard.py` service (protect / analyse / attack lab, `STRENGTH = 0.5`;
+  `precheck()` refuses uploads that are already watermarked or registered -> HTTP 409),
   `store.py` DB (`app/data/tracemark.db`, git-ignored), `crawler.py` web monitor
   (watchlist crawl + scheduler; `/demo/shop` is a generated thief page to crawl),
   `/report/{id}` printable evidence report. `service.py`, `database.py`, `thesis.db`
@@ -113,6 +115,51 @@ the noise attacks are unseeded.
   (developer.allegro.pl, OAuth) to list offers and their image URLs, then feed those to
   `app/crawler.py`. Not implemented (needs the user's API credentials).
 
+## E-commerce vs regular images (2026-10-20, docs/supervisor_questions.md)
+Supervisor Q1. `scripts/fetch_reference_images.py` downloads 60 ABO (Amazon Berkeley Objects,
+real listings, CC BY 4.0) + 60 COCO test2017 photos (seed 0) into git-ignored `data/abo_sample`,
+`data/coco_sample`. `scripts/analyse_ecommerce_images.py` -> `output/ecommerce_analysis/`.
+| median | own 47 | ABO 60 | COCO 60 |
+|---|---|---|---|
+| flat area | 66% | 50% | 5% |
+| pure white #FFFFFF | 0% | 37% | 0% |
+| edge density | 4.4 | 8.4 | 16.8 |
+| saturation | 0.09 | 0.11 | 0.31 |
+| square (mean) / JPEG q | 0% / PNG | 40% / 76 | 7% / 96 |
+`tests/test_ecommerce_vs_regular.py` (30/set x 12 attacks, v2, 0 FP everywhere):
+| set | app 0.7/0.3 blind / full | dE flat | full 1.0 blind |
+|---|---|---|---|
+| own | 100% / 100% | 0.86 | 100% |
+| ABO | **81.7% / 91.4%** | 0.62 | 95.8% |
+| COCO | 95.8% / 98.6% | 0.78 | 98.9% |
+- Real marketplace photos are the hardest case; own photos (grey backdrop, no pure white)
+  overestimate robustness -> report ABO in the thesis. ABO weak spots at 0.7/0.3: native
+  screenshot 17/30, brightness 18/30 (white clips at 255), instagram 21/30, JPEG30 22/30.
+  Failures vs flat share Spearman 0.51 (p .004), vs edge density -0.41 (p .026).
+- All 5 ABO marketplace_square blind misses were tall photos (aspect 0.85 = 1879x2200, 0.52,
+  0.32) not in `ASPECT_RATIOS`; alignment recovered 5/5.
+- Proposed, not implemented: train v3 on COCO+ABO incl. pure-white backgrounds; pre-darken
+  #FFFFFF by 1-2 levels before embedding (headroom against clipping); add 6:7 and 1:2 aspect
+  ratios (costs FP budget); brightness/levels in training.
+
+## Re-watermarking (tests/test_rewatermark.py, 20 own + 20 ABO, v2 at 0.7/0.3)
+Supervisor Q2. Baseline 39/40 read blind (one busy ABO photo fails, pipeline recovers it).
+- Other systems on top (DCT, LSB, HiDDeN v1, stacked 2-3) and visible marks (small corner,
+  large tiled): ours still read blind 36-39/40 (clean/JPEG q70), pipeline 38-40/40, thief ID
+  never; control (same marks on un-watermarked originals) 0/40 false positives each.
+- **Our own v2 on top overwrites ours for the blind decoder**: ours 0/40; thief's ID read
+  28-37/40 (same strength), 40/40 (thief at full strength); 2-3 v2 layers -> mostly nothing.
+  Our residual is still present: `defence.informed_score` (correlation of suspect-original with
+  our exact residual, large changes clipped) beats all 8 never-issued decoy copies in 40/40
+  (same strength), 30-32/40 (thief full strength), 38-40/40 (stacked). Evidence, not a
+  calibrated threshold; needs alignment.
+- Fix: `guard.precheck()` before protecting. API test in a separate TRACEMARK_DATA folder,
+  11 scenarios all correct (copy, +JPEG, +native screenshot, +rotate 8, +promo overlay, leaked
+  clean original, same seller again, foreign valid ID -> 409; unrelated photos -> accepted).
+- Ownership argument: HMAC key (can't forge our IDs) + we hold the earlier clean original;
+  Craver et al. 1997/1998. Not covered: an attacker running their own copy of the model with
+  another key outside our server (pre-check doesn't apply there).
+
 ## Working rules learned the hard way
 - The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
   seed it. Test with `TRACEMARK_DATA=<other folder> uvicorn app.main:app --port 8765`.
@@ -130,7 +177,9 @@ the noise attacks are unseeded.
    still simulations)
 8. Web monitor discovery: plug a reverse-image-search API (Google Vision Web Detection,
    TinEye) into `app/crawler.py`; today it only crawls a watchlist
-9. **Next:** full Colab run of v3 (colour charge + flat-area mask), then re-run
+9. ✅ Supervisor Q1/Q2: e-commerce image analysis + re-watermarking test + upload pre-check
+   (docs/supervisor_questions.md). v3 training should now include ABO product photos
+10. **Next:** full Colab run of v3 (colour charge + flat-area mask), then re-run
    `test_hidden_v2_eval.py`, `test_defence_benchmark.py`, `test_in_the_wild.py` on it
 
 ## HiDDeN v2 training notes

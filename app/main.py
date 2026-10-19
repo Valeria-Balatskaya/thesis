@@ -104,6 +104,8 @@ def api_protect(seller_id: int = Form(...), title: str = Form(...),
     try:
         return {"product": guard.protect(seller_id, title.strip(), image.file,
                                          authorized_url.strip() or None)}
+    except guard.AlreadyProtected as e:
+        raise HTTPException(409, str(e))
     except FileNotFoundError as e:
         raise HTTPException(503, str(e))
     except OSError:

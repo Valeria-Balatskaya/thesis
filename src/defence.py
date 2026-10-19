@@ -260,3 +260,29 @@ class DefencePipeline:
                            "note": "features matched but the pictures differ "
                                    "(same object, different photo?)"})
         return out
+
+
+# ─── ownership dispute: informed (non-blind) check ────────────────
+
+def informed_score(suspect_rgb: np.ndarray, original_rgb: np.ndarray,
+                   watermarked_rgb: np.ndarray) -> float:
+    """
+    Correlation between what the suspect adds to the original and the exact
+    residual WE embedded in one copy (watermarked - original). Used when the
+    blind decoder fails because someone put another watermark on top: the
+    server holds both the clean original and every copy it issued, so it can
+    test for one specific copy's signal directly (informed detection, Cox et
+    al. 1997). Large local changes (visible logos, banners) are clipped so they
+    do not swamp the correlation. All three images must be in the same frame
+    (align first if the suspect was cropped or warped).
+    Compare against decoy residuals of copies never issued (see
+    tests/test_rewatermark.py) to turn the score into a decision.
+    """
+    o = original_rgb.astype(np.float32)
+    ref = (watermarked_rgb.astype(np.float32) - o).ravel()
+    k = 4 * float(ref.std()) + 1e-6
+    d = np.clip(suspect_rgb.astype(np.float32) - o, -k, k).ravel()
+    d = d - d.mean()
+    ref = ref - ref.mean()
+    denom = float(np.linalg.norm(d) * np.linalg.norm(ref))
+    return float(d @ ref / denom) if denom > 1e-6 else 0.0

@@ -122,9 +122,63 @@ def create_copy(product_id: int, label: str) -> dict:
     return copy_json(store.get_copy(copy_id))
 
 
+class AlreadyProtected(Exception):
+    """Upload refused: the image is already watermarked or already registered."""
+
+    def __init__(self, message: str, finding: dict):
+        super().__init__(message)
+        self.finding = finding
+
+
+def precheck(image_path: str, seller_id: int) -> dict | None:
+    """
+    Run the detection pipeline on an upload BEFORE watermarking it.
+    Without this, a thief could download a protected image and protect it again
+    as their own; their watermark is then layered over ours and the blind
+    decoder reads THEIR ID (tests/test_rewatermark.py). Returns a finding when
+    the image must be refused, else None.
+      registered copy   the image carries one of our copy IDs (blind or aligned)
+      same picture      it matches a registered original, watermark unreadable
+      foreign ID        a valid TraceMark ID (made with our key) that is not in
+                        this catalogue, e.g. from a deleted product
+    """
+    p = pipeline()
+    with _lock:
+        res = p.analyse(image_path)
+    if res["verdict"] in ("watermark", "watermark_aligned", "fingerprint_only"):
+        product = store.get_product(res["product_id"])
+        return {"reason": "registered_copy" if res["copy_id"] is not None else "same_picture",
+                "verdict": res["verdict"], "product_id": product["id"],
+                "product_title": product["title"], "copy_id": res["copy_id"],
+                "owner_seller_id": product["seller_id"],
+                "owner_name": product["seller_name"],
+                "same_seller": product["seller_id"] == seller_id}
+    blind = res["stages"][0] if res["stages"] else {}
+    if blind.get("note") == "decoded an ID that is not registered":
+        return {"reason": "foreign_id", "verdict": "watermark", "same_seller": False}
+    return None
+
+
+def _refusal_message(f: dict) -> str:
+    if f["reason"] == "foreign_id":
+        return ("This image already carries a TraceMark watermark that is not in this "
+                "catalogue, so it cannot be protected again.")
+    what = (f"carries the watermark of copy #{f['copy_id']}" if f["reason"] == "registered_copy"
+            else "is the same picture")
+    if f["same_seller"]:
+        return (f"You already protected this image: it {what} of your product "
+                f"\"{f['product_title']}\" (#{f['product_id']}). Issue a new copy there instead.")
+    return (f"This image is already registered to another seller: it {what} of product "
+            f"#{f['product_id']} (\"{f['product_title']}\"). It cannot be protected again.")
+
+
 def protect(seller_id: int, title: str, upload_file, authorized_url: str | None) -> dict:
     tmp = DATA / "originals" / f"tmp_{uuid.uuid4().hex}.png"
     width, height = _save_normalised(upload_file, tmp)
+    finding = precheck(str(tmp), seller_id)
+    if finding:
+        tmp.unlink(missing_ok=True)
+        raise AlreadyProtected(_refusal_message(finding), finding)
     product_id = store.create_product(seller_id, title, str(tmp), width, height)
     final = DATA / "originals" / f"p{product_id}.png"
     tmp.rename(final)
