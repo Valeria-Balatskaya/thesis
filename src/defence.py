@@ -21,6 +21,9 @@
 #
 # Verdicts, strongest first:
 #   watermark          blind read succeeded
+#   watermark_unbound  (only with verify_content=True) the ID decodes but the
+#                      image does not show the registered picture: possible
+#                      copy attack (watermark transplanted onto another image)
 #   watermark_aligned  read succeeded after alignment -> proves the suspect
 #                      derives from the published, watermarked copy
 #   fingerprint_only   same picture as a registered original, watermark not
@@ -97,7 +100,8 @@ def match(suspect_fp: dict, ref_fp: dict) -> dict | None:
     return {"H": H, "inliers": inliers, "matches": len(good)}
 
 
-def align(suspect_rgb: np.ndarray, H: np.ndarray, original_rgb: np.ndarray):
+def align(suspect_rgb: np.ndarray, H: np.ndarray, original_rgb: np.ndarray,
+          ignore_padding: bool = False):
     """
     Warp the suspect into the original's frame.
     Returns (aligned image, coverage fraction, structural similarity to original).
@@ -121,6 +125,11 @@ def align(suspect_rgb: np.ndarray, H: np.ndarray, original_rgb: np.ndarray):
         g = cv2.GaussianBlur(g.astype(np.float32), (0, 0), 1.0)
         return cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1)
 
+    if ignore_padding:
+        # Black padding added by the attacker (crop-and-pad, letterboxing) is
+        # not part of the picture: leave it out where the original is not dark
+        pad = (warped.max(axis=2) <= 3) & (original_rgb.max(axis=2) > 30)
+        mask = mask & ~pad
     m = cv2.resize(mask.astype(np.uint8), size, interpolation=cv2.INTER_NEAREST)
     m = cv2.erode(m, np.ones((5, 5), np.uint8)) > 0
     if m.sum() < 200:
@@ -186,7 +195,26 @@ class DefencePipeline:
                     "limit": limit}
         return None
 
-    def analyse(self, suspect_path: str, use_alignment: bool = True) -> dict:
+    def content_bound(self, suspect: np.ndarray, product_id: int) -> dict:
+        """
+        Copy-attack check (Kutter et al. 2000): does the suspect actually show the
+        registered picture of the product whose ID was read? A watermark
+        transplanted onto another image decodes fine but fails this.
+        """
+        entry = self.products[product_id]
+        for flipped in (False, True):
+            img = suspect[:, ::-1].copy() if flipped else suspect
+            m = match(fingerprint(img), entry["fp"])
+            if m:
+                _, coverage, similarity = align(img, m["H"], _load_rgb(entry["original_path"]),
+                                                ignore_padding=True)
+                if similarity >= MIN_SIMILARITY:
+                    return {"ok": True, "inliers": m["inliers"], "similarity": round(similarity, 3)}
+                return {"ok": False, "inliers": m["inliers"], "similarity": round(similarity, 3)}
+        return {"ok": False, "inliers": 0, "similarity": None}
+
+    def analyse(self, suspect_path: str, use_alignment: bool = True,
+                verify_content: bool = False) -> dict:
         suspect = _load_rgb(suspect_path)
         stages = []
         out = {"verdict": "none", "copy_id": None, "product_id": None,
@@ -204,6 +232,13 @@ class DefencePipeline:
         if known:
             out.update(verdict="watermark", copy_id=blind["product_id"],
                        product_id=self.copy_to_product[blind["product_id"]])
+            if verify_content:
+                bound = self.content_bound(suspect, out["product_id"])
+                stages.append({"stage": "content_bound", **bound})
+                if not bound["ok"]:
+                    # ID decodes, but the picture is not the registered one:
+                    # a transplanted watermark, or the image is too altered to compare
+                    out["verdict"] = "watermark_unbound"
             return out
         if not use_alignment or not self.products:
             return out
@@ -286,3 +321,77 @@ def informed_score(suspect_rgb: np.ndarray, original_rgb: np.ndarray,
     ref = ref - ref.mean()
     denom = float(np.linalg.norm(d) * np.linalg.norm(ref))
     return float(d @ ref / denom) if denom > 1e-6 else 0.0
+
+
+class InformedChecker:
+    """
+    Calibrated version of informed_score (Part B2): is THIS copy's v2 residual
+    present in a suspect? The score for copy_id is compared with a null
+    distribution of n_null never-issued copies (random IDs outside the 20-bit
+    space, so they can never be real), embedded the same way on the same original.
+
+    Built once per original (the n_null decoy residuals cost one batched pass),
+    then test() is a matrix product per suspect. Everything is computed at
+    `side` px (longer side): the v2 residual is generated at 128 px and
+    upsampled, so nothing is lost. Suspects must be in the original's frame
+    (align first). Decision rule used in the thesis: z >= Z_THRESHOLD.
+    """
+
+    def __init__(self, model: HiddenV2Model, original_rgb: np.ndarray, copy_id: int,
+                 n_null: int = 500, side: int = 256, embed_kwargs: dict | None = None,
+                 seed: int = 0):
+        kw = {"strength": 0.7, "mask_floor": 0.3, **(embed_kwargs or {})}
+        h, w = original_rgb.shape[:2]
+        scale = side / max(h, w)
+        self.size = (max(1, round(w * scale)), max(1, round(h * scale)))
+        o = cv2.resize(original_rgb, self.size, interpolation=cv2.INTER_AREA)
+        self.o = o.astype(np.float32).transpose(2, 0, 1).reshape(-1) / 255
+        x = torch.from_numpy(o.astype(np.float32) / 255).permute(2, 0, 1).unsqueeze(0)
+        x = x.to(model.device)
+        rng = np.random.default_rng(seed)
+        ids = [copy_id] + [int(v) for v in rng.integers(1 << 21, 1 << 30, n_null)]
+        refs = []
+        with torch.no_grad():
+            for start in range(0, len(ids), 128):
+                chunk = ids[start:start + 128]
+                msgs = torch.tensor(np.stack([_codeword_any(c) for c in chunk]),
+                                    dtype=torch.float32, device=model.device)
+                wm = model.model.watermark(x.expand(len(chunk), -1, -1, -1), msgs, **kw)
+                refs.append((wm - x).cpu().numpy().reshape(len(chunk), -1))
+        refs = np.concatenate(refs)
+        self.clip = 4 * float(refs[0].std()) + 1e-6
+        refs = refs - refs.mean(axis=1, keepdims=True)
+        self.refs = refs / (np.linalg.norm(refs, axis=1, keepdims=True) + 1e-12)
+
+    def test(self, suspect_rgb: np.ndarray) -> dict:
+        s = cv2.resize(suspect_rgb, self.size, interpolation=cv2.INTER_AREA)
+        d = s.astype(np.float32).transpose(2, 0, 1).reshape(-1) / 255 - self.o
+        d = np.clip(d, -self.clip, self.clip)
+        d = d - d.mean()
+        nd = float(np.linalg.norm(d))
+        if nd < 1e-9:                    # suspect identical to the clean original
+            return {"score": 0.0, "z": 0.0, "p_empirical": 1.0, "null_mean": 0.0, "null_std": 0.0}
+        scores = self.refs @ d / nd
+        score, null = float(scores[0]), scores[1:]
+        z = (score - null.mean()) / (null.std() + 1e-12)
+        return {"score": round(score, 4), "z": round(float(z), 2),
+                "p_empirical": (1 + int((null >= score).sum())) / (len(null) + 1),
+                "null_mean": round(float(null.mean()), 4), "null_std": round(float(null.std()), 4)}
+
+
+Z_THRESHOLD = 4.0     # calibrated in tests/test_overwrite_defences.py
+
+
+def informed_test(model: HiddenV2Model, suspect_rgb: np.ndarray, original_rgb: np.ndarray,
+                  copy_id: int, **kwargs) -> dict:
+    """One-off InformedChecker(...).test(suspect)."""
+    return InformedChecker(model, original_rgb, copy_id, **kwargs).test(suspect_rgb)
+
+
+def _codeword_any(copy_id: int) -> np.ndarray:
+    """63-bit message for any integer ID (decoys may exceed the 20-bit ID space)."""
+    from src.payload import MAX_PRODUCT_ID
+    if 0 <= copy_id <= MAX_PRODUCT_ID:
+        return encode_product_id(copy_id)
+    seed = np.random.default_rng(copy_id)
+    return seed.integers(0, 2, PAYLOAD_BITS).astype(np.uint8)
