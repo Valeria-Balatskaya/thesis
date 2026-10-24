@@ -200,10 +200,19 @@ class Distortions(nn.Module):
     NAMES = ["identity", "jpeg", "noise", "blur", "resize", "crop", "perspective",
              "colour", "screenshot", "print_photo", "combo"]
     WEIGHTS = [1, 2, 1, 1, 1, 1.5, 1.5, 1.5, 2, 1.5, 1.5]
+    # v3 adds brightness/levels changes, which clip a white background at 255
+    # and wipe the watermark there (the weakest attack on ABO product photos)
+    EXTRA = {"v3": (["levels"], [1.5])}
+
+    def __init__(self, distortion_set: str = "v2"):
+        super().__init__()
+        extra_names, extra_weights = self.EXTRA.get(distortion_set, ([], []))
+        self.names = self.NAMES + extra_names
+        self.weights = self.WEIGHTS + extra_weights
 
     def forward(self, x: torch.Tensor, s: float = 1.0, name: str | None = None):
         if name is None:
-            name = random.choices(self.NAMES, weights=self.WEIGHTS)[0] if s > 0 else "identity"
+            name = random.choices(self.names, weights=self.weights)[0] if s > 0 else "identity"
         return getattr(self, name)(x, s), name
 
     # --- single distortions ---
@@ -292,6 +301,15 @@ class Distortions(nn.Module):
             x = x * (1 - _u(0, 0.4 * s) * (xs ** 2 + ys ** 2) / 2)
         return torch.clamp(x, 0, 1)
 
+    def levels(self, x, s):
+        """Exposure / levels edit: black point up, white point down, gain > 1.
+        Everything near white clips to 1.0, as in a 'brighten' slider."""
+        black = _u(0, 0.06 * s)
+        white = _u(1 - 0.15 * s, 1)
+        gain = _u(1, 1 + 0.25 * s)
+        x = (x - black) / max(white - black, 1e-3) * gain
+        return torch.clamp(x, 0, 1)
+
     # --- pipelines ---
 
     def screenshot(self, x, s):
@@ -352,10 +370,54 @@ def texture_mask(image: torch.Tensor, floor: float, tau: float = 0.03) -> torch.
     return _gaussian_blur(floor + (1 - floor) * (std / tau).clamp(0, 1), 2 * unit)
 
 
+def white_weight(image: torch.Tensor, level: float = 250 / 255) -> torch.Tensor:
+    """1 on pure-white pixels (all channels >= level), 0 elsewhere, softened."""
+    unit = max(image.shape[-2:]) / 256
+    white = (image.min(dim=1, keepdim=True).values >= level).float()
+    return _gaussian_blur(white, unit).clamp(0, 1)
+
+
+def nvf_mask(image: torch.Tensor, floor: float, d: float = 100.0) -> torch.Tensor:
+    """
+    Noise visibility function mask (Voloshynovskiy, Herrigel, Baumgaertner &
+    Pun 1999, "A stochastic approach to content adaptive digital image
+    watermarking"):
+        NVF = 1 / (1 + theta * var_local),  theta = D / var_max
+    NVF is ~1 on flat areas (noise would be visible) and ~0 in texture.
+    The embedding weight is floor + (1 - floor) * (1 - NVF): `floor` on flat
+    areas, full strength in texture. D in [50, 100] in the paper.
+    """
+    unit = max(image.shape[-2:]) / 256
+    y = _luma(image) * 255
+    mean = _gaussian_blur(y, unit)
+    var = (_gaussian_blur(y * y, unit) - mean * mean).clamp(min=0)
+    theta = d / var.amax(dim=(2, 3), keepdim=True).clamp(min=1e-6)
+    nvf = 1 / (1 + theta * var)
+    return _gaussian_blur(floor + (1 - floor) * (1 - nvf), unit)
+
+
+def embedding_mask(image: torch.Tensor, mask_type: str, floor: float,
+                   zero_white: bool = False) -> torch.Tensor | None:
+    """Per-pixel watermark amplitude in [0, 1], or None for no masking."""
+    if mask_type == "none" or (mask_type == "flat" and floor >= 1.0 and not zero_white):
+        return None
+    if mask_type == "flat":
+        m = texture_mask(image, floor) if floor < 1.0 else torch.ones_like(image[:, :1])
+    elif mask_type == "nvf":
+        m = nvf_mask(image, floor)
+    else:
+        raise ValueError(f"unknown mask_type {mask_type!r}")
+    if zero_white:
+        m = m * (1 - white_weight(image))
+    return m
+
+
 class HiDDeNv2(nn.Module):
     def __init__(self, msg_len: int = 63, image_size: int = 128,
                  target_psnr: float = 40.0, chroma_weight: float = 1.0,
-                 mask_floor: float = 1.0):
+                 mask_floor: float = 1.0, mask_type: str = "flat",
+                 zero_white: bool = False, mask_renorm: bool = False,
+                 headroom: int = 0, distortion_set: str = "v2"):
         """
         chroma_weight: how much more a colour change counts against the quality
             budget than a brightness change. 1.0 = plain RGB budget. Trained at
@@ -363,6 +425,15 @@ class HiDDeNv2(nn.Module):
             visible as a green/purple tint on white backgrounds.
         mask_floor: watermark amplitude on flat image areas relative to textured
             ones (1.0 = no masking).
+        mask_type: "flat" (local-std texture mask, v2) or "nvf" (noise
+            visibility function, Voloshynovskiy et al. 1999) or "none".
+        zero_white: no watermark at all on pure-white pixels.
+        mask_renorm: rescale the masked residual back to the quality budget,
+            i.e. move the energy taken off flat areas into textured ones.
+        headroom: pull pixels into [headroom, 255 - headroom] before embedding
+            so an additive residual is not clipped at pure white / black.
+        distortion_set: "v2" or "v3" (adds brightness/levels).
+        Defaults reproduce v2 exactly.
         """
         super().__init__()
         self.msg_len = msg_len
@@ -370,9 +441,13 @@ class HiDDeNv2(nn.Module):
         self.target_psnr = target_psnr
         self.chroma_weight = chroma_weight
         self.mask_floor = mask_floor
+        self.mask_type = mask_type
+        self.zero_white = zero_white
+        self.mask_renorm = mask_renorm
+        self.headroom = headroom
         self.encoder = EncoderV2(msg_len)
         self.decoder = DecoderV2(msg_len)
-        self.distort = Distortions()
+        self.distort = Distortions(distortion_set)
 
     def _to_model_size(self, x: torch.Tensor) -> torch.Tensor:
         size = (self.image_size, self.image_size)
@@ -383,7 +458,9 @@ class HiDDeNv2(nn.Module):
 
     def watermark(self, image: torch.Tensor, message: torch.Tensor,
                   strength: float = 1.0, psnr: float | None = None,
-                  mask_floor: float | None = None) -> torch.Tensor:
+                  mask_floor: float | None = None, mask_type: str | None = None,
+                  zero_white: bool | None = None, mask_renorm: bool | None = None,
+                  headroom: int | None = None) -> torch.Tensor:
         """
         Full-resolution image [B,3,H,W] in [0,1] -> watermarked image, same size.
         The residual is zero-mean per channel (no global colour shift) and
@@ -402,10 +479,21 @@ class HiDDeNv2(nn.Module):
             chroma = residual - _luma(residual)
             energy = energy + (self.chroma_weight - 1) * chroma.pow(2).mean(dim=(1, 2, 3), keepdim=True)
         target_rms = 10 ** (-(psnr or self.target_psnr) / 20)
-        residual = residual * (target_rms / (energy.sqrt() + 1e-8)) * strength
+        scale = target_rms / (energy.sqrt() + 1e-8)
+        residual = residual * scale * strength
         floor = self.mask_floor if mask_floor is None else mask_floor
-        if floor < 1.0:
-            residual = residual * texture_mask(image, floor)
+        mtype = self.mask_type if mask_type is None else mask_type
+        zw = self.zero_white if zero_white is None else zero_white
+        mask = embedding_mask(image, mtype, floor, zw)
+        if mask is not None:
+            unmasked_rms = residual.pow(2).mean(dim=(1, 2, 3), keepdim=True).sqrt()
+            residual = residual * mask
+            if self.mask_renorm if mask_renorm is None else mask_renorm:
+                masked_rms = residual.pow(2).mean(dim=(1, 2, 3), keepdim=True).sqrt()
+                residual = residual * (unmasked_rms / (masked_rms + 1e-8))
+        h = self.headroom if headroom is None else headroom
+        if h:
+            image = image.clamp(h / 255, 1 - h / 255)
         return torch.clamp(image + residual, 0, 1)
 
     def decode(self, image: torch.Tensor) -> torch.Tensor:
@@ -414,9 +502,18 @@ class HiDDeNv2(nn.Module):
 
     def forward(self, image: torch.Tensor, message: torch.Tensor,
                 severity: float = 1.0, distortion: str | None = None,
-                psnr: float | None = None):
+                psnr: float | None = None, overwrite_prob: float = 0.0):
         watermarked = self.watermark(image, message, psnr=psnr)
         # Published files are 8-bit
         published = _round_ste(watermarked * 255) / 255
+        if overwrite_prob > 0 and random.random() < overwrite_prob:
+            # Overwrite augmentation: someone re-protects the published image
+            # with the same model and a random message. The decoder must still
+            # return the FIRST message. Gradients flow through the second
+            # embedding too, so the encoder can learn to reinforce a watermark
+            # that is already present instead of writing over it.
+            second = torch.randint_like(message, 0, 2)
+            published = self.watermark(published, second, strength=_u(0.5, 1.5), psnr=psnr)
+            published = _round_ste(published * 255) / 255
         attacked, name = self.distort(published, severity, distortion)
         return watermarked, self.decode(attacked), name

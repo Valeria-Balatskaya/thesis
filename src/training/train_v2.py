@@ -14,9 +14,19 @@
 #     and tightens linearly to `target_psnr`. Starting directly at 40 dB keeps
 #     the model near chance for thousands of steps.
 #
-# Checkpoints: hidden_v2_latest.pt (resume after a Colab disconnect),
+# Checkpoints: hidden_v2_latest.pt (resume after a Colab disconnect; written
+#              every --save-every steps and at every validation),
 #              hidden_v2_best.pt   (best validation accuracy at full severity),
 #              hidden_v2_final.pt.
+#
+# v3 options (all default to the v2 behaviour):
+#   several --data folders with --data-weights (e.g. COCO + ABO products, 50/50);
+#     validation holds out the last images of EACH folder and reports per source
+#   --mask-type nvf --mask-floor 0.1 --zero-white --mask-renorm   texture-adaptive embedding,
+#     applied inside training so the network learns to live with the mask
+#   --headroom 2                pull pure white/black in by 2 levels before embedding
+#   --distortions v3            adds brightness/levels (white clipping)
+#   --overwrite-prob 0.15       re-embed a random second message; decoder must return the first
 
 import argparse
 import math
@@ -25,7 +35,7 @@ import time
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, ConcatDataset, WeightedRandomSampler
 
 from src.hidden_v2 import HiDDeNv2, Distortions
 from src.training.dataset import WatermarkDataset
@@ -53,6 +63,23 @@ def _lr(step: int, total_steps: int, base_lr: float) -> float:
 
 
 @torch.no_grad()
+def validate_sources(model: HiDDeNv2, loaders: dict, device: str, ecc_t: int) -> dict:
+    """validate() per data source; the combined entry averages the sources."""
+    per = {name: validate(model, loader, device, ecc_t) for name, loader in loaders.items()}
+    if len(per) == 1:
+        return next(iter(per.values()))
+    names = model.distort.names
+    out = {n: {k: sum(v[n][k] for v in per.values()) / len(per) for k in ("bit_acc", "decodable")}
+           for n in names}
+    out["_mean_bit_acc"] = sum(v["_mean_bit_acc"] for v in per.values()) / len(per)
+    out["_psnr"] = sum(v["_psnr"] for v in per.values()) / len(per)
+    out["_sources"] = {k: {"mean_bit_acc": v["_mean_bit_acc"], "psnr": v["_psnr"],
+                           "mean_decodable": sum(v[n]["decodable"] for n in names) / len(names)}
+                       for k, v in per.items()}
+    return out
+
+
+@torch.no_grad()
 def validate(model: HiDDeNv2, loader: DataLoader, device: str, ecc_t: int) -> dict:
     """
     Per-distortion results at full severity on held-out images:
@@ -62,13 +89,13 @@ def validate(model: HiDDeNv2, loader: DataLoader, device: str, ecc_t: int) -> di
     """
     model.eval()
     gen = torch.Generator().manual_seed(0)
-    stats = {name: [0.0, 0.0, 0] for name in Distortions.NAMES}
+    stats = {name: [0.0, 0.0, 0] for name in model.distort.names}
     psnr_sum, n_img = 0.0, 0
     for image, _ in loader:
         image = image.to(device)
         message = torch.randint(0, 2, (image.size(0), model.msg_len),
                                 generator=gen).float().to(device)
-        for name in Distortions.NAMES:
+        for name in model.distort.names:
             watermarked, logits, _ = model(image, message, 1.0, name)
             errors = ((logits > 0).float() != message).sum(dim=1)
             stats[name][0] += (1 - errors.float() / model.msg_len).sum().item()
@@ -79,7 +106,7 @@ def validate(model: HiDDeNv2, loader: DataLoader, device: str, ecc_t: int) -> di
         n_img += image.size(0)
     model.train()
     out = {name: {"bit_acc": a / n, "decodable": d / n} for name, (a, d, n) in stats.items()}
-    out["_mean_bit_acc"] = sum(v["bit_acc"] for v in out.values()) / len(Distortions.NAMES)
+    out["_mean_bit_acc"] = sum(v["bit_acc"] for v in out.values()) / len(model.distort.names)
     out["_psnr"] = psnr_sum / n_img
     return out
 
@@ -87,8 +114,11 @@ def validate(model: HiDDeNv2, loader: DataLoader, device: str, ecc_t: int) -> di
 def _print_validation(step: int, val: dict) -> None:
     print(f"\n[val @ {step}] PSNR {val['_psnr']:.2f} dB   mean bit acc {val['_mean_bit_acc']:.3f}")
     print(f"  {'distortion':<13}{'bit acc':>9}{'decodable':>11}")
-    for name in Distortions.NAMES:
+    for name in [k for k in val if not k.startswith("_")]:
         print(f"  {name:<13}{val[name]['bit_acc']:>9.3f}{val[name]['decodable']:>10.0%}")
+    for src, v in val.get("_sources", {}).items():
+        print(f"  [{src}] PSNR {v['psnr']:.2f} dB  bit acc {v['mean_bit_acc']:.3f}  "
+              f"decodable {v['mean_decodable']:.0%}")
     print()
 
 
@@ -101,6 +131,14 @@ def train(
     start_psnr: float = 30.0,
     chroma_weight: float = 1.0,
     mask_floor: float = 1.0,
+    mask_type: str = "flat",
+    zero_white: bool = False,
+    mask_renorm: bool = False,
+    headroom: int = 0,
+    distortion_set: str = "v2",
+    overwrite_prob: float = 0.0,
+    data_weights: list | None = None,
+    save_every: int = 2000,
     batch_size: int = 32,
     total_steps: int = 40000,
     lr: float = 1e-3,
@@ -119,21 +157,41 @@ def train(
     print(f"[train_v2] device={device}")
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    dataset = WatermarkDataset(image_dirs, msg_len=msg_len, image_size=train_size)
-    dataset.paths.sort()
-    n_val = min(val_images, len(dataset) // 5)
-    train_set = Subset(dataset, range(len(dataset) - n_val))
-    val_set = Subset(dataset, range(len(dataset) - n_val, len(dataset)))
-    print(f"[train_v2] {len(train_set)} training / {len(val_set)} validation images")
+    # One dataset per folder; the last images of each folder are held out, so
+    # every source is validated separately (e.g. COCO vs ABO product photos).
+    train_parts, val_loaders = [], {}
+    per_folder_val = max(1, val_images // len(image_dirs))
+    for d in image_dirs:
+        ds = WatermarkDataset([d], msg_len=msg_len, image_size=train_size)
+        ds.paths.sort()
+        n_val = min(per_folder_val, len(ds) // 5)
+        train_parts.append(Subset(ds, range(len(ds) - n_val)))
+        val_loaders[os.path.basename(os.path.normpath(d))] = DataLoader(
+            Subset(ds, range(len(ds) - n_val, len(ds))), batch_size=batch_size,
+            shuffle=False, num_workers=num_workers)
+    train_set = ConcatDataset(train_parts)
+    for d, part in zip(image_dirs, train_parts):
+        print(f"[train_v2] {d}: {len(part)} training images")
+    print(f"[train_v2] {len(train_set)} training / "
+          f"{sum(len(l.dataset) for l in val_loaders.values())} validation images")
 
-    loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
-                        num_workers=num_workers, pin_memory=(device == "cuda"),
-                        drop_last=True, persistent_workers=num_workers > 0)
-    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
-                            num_workers=num_workers)
+    if data_weights:
+        # Sample each source with the given share, whatever its size
+        assert len(data_weights) == len(image_dirs), "one --data-weights value per --data folder"
+        weights = torch.cat([torch.full((len(p),), w / len(p)) for p, w in zip(train_parts, data_weights)])
+        sampler = WeightedRandomSampler(weights, num_samples=len(train_set), replacement=True)
+        loader = DataLoader(train_set, batch_size=batch_size, sampler=sampler,
+                            num_workers=num_workers, pin_memory=(device == "cuda"),
+                            drop_last=True, persistent_workers=num_workers > 0)
+    else:
+        loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                            num_workers=num_workers, pin_memory=(device == "cuda"),
+                            drop_last=True, persistent_workers=num_workers > 0)
 
     model = HiDDeNv2(msg_len=msg_len, image_size=image_size, target_psnr=target_psnr,
-                     chroma_weight=chroma_weight, mask_floor=mask_floor).to(device)
+                     chroma_weight=chroma_weight, mask_floor=mask_floor,
+                     mask_type=mask_type, zero_white=zero_white, mask_renorm=mask_renorm,
+                     headroom=headroom, distortion_set=distortion_set).to(device)
     params = list(model.encoder.parameters()) + list(model.decoder.parameters())
     opt = torch.optim.Adam(params, lr=lr)
 
@@ -156,6 +214,14 @@ def train(
             "target_psnr": target_psnr,
             "chroma_weight": chroma_weight,
             "mask_floor": mask_floor,
+            "mask_type": mask_type,
+            "zero_white": zero_white,
+            "mask_renorm": mask_renorm,
+            "headroom": headroom,
+            "distortion_set": distortion_set,
+            "overwrite_prob": overwrite_prob,
+            "data": [str(d) for d in image_dirs],
+            "data_weights": data_weights,
             "best_acc": best_acc,
             **extra,
         }, os.path.join(checkpoint_dir, name))
@@ -174,7 +240,9 @@ def train(
                 group["lr"] = _lr(step, total_steps, lr)
 
             psnr = _psnr(step, start_psnr, target_psnr, ramp_end)
-            _, logits, _ = model(image, message, severity, psnr=psnr)
+            # overwrite augmentation only once the networks communicate at all
+            ow = overwrite_prob if step >= warmup_steps else 0.0
+            _, logits, _ = model(image, message, severity, psnr=psnr, overwrite_prob=ow)
             loss = F.binary_cross_entropy_with_logits(logits, message)
             opt.zero_grad()
             loss.backward()
@@ -195,8 +263,11 @@ def train(
                       f"({its:.1f} it/s)")
                 running = {"loss": 0.0, "acc": 0.0, "n": 0}
 
+            if step % save_every == 0 and step % val_every != 0:
+                save("hidden_v2_latest.pt")
+
             if step % val_every == 0 or step == total_steps:
-                val = validate(model, val_loader, device, ecc_t)
+                val = validate_sources(model, val_loaders, device, ecc_t)
                 _print_validation(step, val)
                 # "best" only counts once severity and quality are at their final values
                 if step >= ramp_end and val["_mean_bit_acc"] > best_acc:
@@ -221,6 +292,16 @@ if __name__ == "__main__":
                    help="colour changes count this many times against the quality budget")
     p.add_argument("--mask-floor", type=float, default=1.0,
                    help="watermark amplitude on flat areas (1.0 = no masking)")
+    p.add_argument("--mask-type", default="flat", choices=["flat", "nvf", "none"])
+    p.add_argument("--zero-white", action="store_true", help="no watermark on pure-white pixels")
+    p.add_argument("--mask-renorm", action="store_true",
+                   help="move the energy removed from flat areas into textured ones")
+    p.add_argument("--headroom", type=int, default=0, help="levels kept free at pure white/black")
+    p.add_argument("--distortions", default="v2", choices=["v2", "v3"])
+    p.add_argument("--overwrite-prob", type=float, default=0.0)
+    p.add_argument("--data-weights", type=float, nargs="+", default=None,
+                   help="sampling share per --data folder, e.g. 0.5 0.5")
+    p.add_argument("--save-every", type=int, default=2000)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--warmup-steps", type=int, default=2000)
     p.add_argument("--ramp-end", type=int, default=15000)
@@ -232,7 +313,11 @@ if __name__ == "__main__":
     a = p.parse_args()
     train(a.data, total_steps=a.steps, batch_size=a.batch_size,
           target_psnr=a.target_psnr, start_psnr=a.start_psnr,
-          chroma_weight=a.chroma_weight, mask_floor=a.mask_floor, lr=a.lr, warmup_steps=a.warmup_steps,
+          chroma_weight=a.chroma_weight, mask_floor=a.mask_floor, mask_type=a.mask_type,
+          zero_white=a.zero_white, mask_renorm=a.mask_renorm, headroom=a.headroom,
+          distortion_set=a.distortions, overwrite_prob=a.overwrite_prob,
+          data_weights=a.data_weights, save_every=a.save_every,
+          lr=a.lr, warmup_steps=a.warmup_steps,
           ramp_end=a.ramp_end, val_every=a.val_every, log_every=a.log_every,
           checkpoint_dir=a.out, resume_from=a.resume, num_workers=a.workers,
           device=a.device)
