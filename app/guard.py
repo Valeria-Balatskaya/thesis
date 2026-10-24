@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import numpy as np
 from PIL import Image
 
-from app import store
+from app import registry_log, store
 from src import attacks, ecommerce_attacks as ea, modern_attacks as ma
 from src.defence import DefencePipeline
 from src.hidden_v2_inference import HiddenV2Model
@@ -115,6 +115,7 @@ def create_copy(product_id: int, label: str) -> dict:
                               strength=STRENGTH, mask_floor=MASK_FLOOR)
     q = quality(product["original_path"], str(path))
     store.finish_copy(copy_id, str(path), q["PSNR_dB"], q["SSIM"])
+    registry_log.append(copy_id)       # signed, hash-chained registration record
     _write_diff(product["original_path"], str(path), DATA / "diff" / f"c{copy_id}.png")
     with _lock:
         p.register(product_id, product["original_path"],
