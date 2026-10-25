@@ -337,6 +337,15 @@ def report(detection_id: int):
             facts.append(f"After alignment {verify['bit_errors']} of {PAYLOAD_BITS} bits differed from this "
                          f"copy's code; up to {verify['limit']} are accepted at a false-positive rate of 1e-6.")
 
+    own = d["details"].get("ownership")
+    if own:
+        for o in own:
+            parts = [f"v2 informed z = {o['informed_z']:.1f} (threshold 4)"]
+            if o["dct_sim"] is not None:
+                parts.append(f"DCT layer similarity = {o['dct_sim']:.1f} (threshold 6)")
+            facts.append(f"Ownership check for copy #{o['copy_id']} ({o['label']}): "
+                         f"{'PRESENT' if o['owned'] else 'not found'} — " + ", ".join(parts) + ".")
+
     def img(url, caption):
         return (f'<figure><img src="{e(url)}"><figcaption>{e(caption)}</figcaption></figure>'
                 if url else "")

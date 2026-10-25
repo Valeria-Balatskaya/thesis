@@ -264,7 +264,8 @@ class DefencePipeline:
         for cand in candidates[:TOP_K]:
             entry = self.products[cand["product_id"]]
             aligned, coverage, similarity = align(cand["img"], cand["H"],
-                                                  _load_rgb(entry["original_path"]))
+                                                  _load_rgb(entry["original_path"]),
+                                                  ignore_padding=verify_content)
             info = {"product_id": cand["product_id"], "inliers": cand["inliers"],
                     "flipped": cand["flipped"], "coverage": round(coverage, 3),
                     "similarity": round(similarity, 3)}
@@ -277,6 +278,10 @@ class DefencePipeline:
                 out.update(verdict="watermark_aligned", copy_id=verified["copy_id"],
                            product_id=self.copy_to_product[verified["copy_id"]],
                            aligned=aligned)
+                if verify_content and similarity < MIN_SIMILARITY:
+                    # bits match after alignment, but the picture does not: e.g. a
+                    # high-pass copy attack that also carries ghost edges of our photo
+                    out["verdict"] = "watermark_unbound"
                 return out
             # Near-identical photos (same object, same session) can all match;
             # the one whose structure agrees best is the picture itself.
@@ -395,3 +400,36 @@ def _codeword_any(copy_id: int) -> np.ndarray:
         return encode_product_id(copy_id)
     seed = np.random.default_rng(copy_id)
     return seed.integers(0, 2, PAYLOAD_BITS).astype(np.uint8)
+
+
+def ownership_check(model: HiddenV2Model, suspect_rgb: np.ndarray, original_rgb: np.ndarray,
+                    copy_id: int, dct_reference_rgb: np.ndarray | None = None,
+                    checker: "InformedChecker | None" = None) -> dict:
+    """
+    Ownership evidence when the blind decoder cannot read our ID (e.g. someone
+    re-protected the image with their own watermark). Two independent informed
+    checks; the copy counts as present if either fires:
+      v2 informed  calibrated z-score of our exact colour residual (InformedChecker)
+      DCT layer    keyed luminance spread spectrum (src/dct_layer), if the copy has one
+    The suspect is aligned to the original's frame first (SIFT/RANSAC); false
+    positives measured 0/240 and 0/480 (tests/test_overwrite_defences.py).
+    """
+    from src import dct_layer
+    suspect = suspect_rgb
+    if suspect.shape != original_rgb.shape:
+        fp = fingerprint(original_rgb)
+        m = match(fingerprint(suspect), fp)
+        if m is None:
+            flipped = suspect[:, ::-1].copy()
+            m = match(fingerprint(flipped), fp)
+            suspect = flipped if m is not None else suspect
+        if m is None:
+            return {"aligned": False, "informed": None, "dct": None, "owned": False}
+        suspect = align(suspect, m["H"], original_rgb)[0]
+    checker = checker or InformedChecker(model, original_rgb, copy_id)
+    informed = checker.test(suspect)
+    dct = None
+    if dct_reference_rgb is not None:
+        dct = dct_layer.detect(suspect, dct_reference_rgb, copy_id)
+    owned = informed["z"] >= Z_THRESHOLD or bool(dct and dct["detected"])
+    return {"aligned": True, "informed": informed, "dct": dct, "owned": owned}
