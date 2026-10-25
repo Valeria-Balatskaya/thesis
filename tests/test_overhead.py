@@ -114,7 +114,9 @@ print(f"\nownership (cpu, 1024px): DCT embed {t_dct_e:.3f}s  DCT detect {t_dct_d
       f"informed build {t_inf_b:.2f}s  informed test {t_inf_t:.4f}s", flush=True)
 
 # ─── retrieval scaling (CPU) ──────────────────────────────────────
-pool = sorted(os.listdir("data/abo_negatives"))[20:]
+pool = [f"data/abo_negatives/{f}" for f in sorted(os.listdir("data/abo_negatives"))[20:]] + \
+       [f"data/coco_sample/{f}" for f in sorted(os.listdir("data/coco_sample"))] + \
+       [f"data/abo_sample/{f}" for f in sorted(os.listdir("data/abo_sample"))[2:]]
 pipe = DefencePipeline(model)
 pipe.register(0, f"{OUT}/orig_1024.png", [4242])
 rot = f"{OUT}/rot_1024.png"
@@ -123,8 +125,7 @@ print("\nretrieval scaling (cpu, 1024px, rotated copy of product 0 -> full pipel
 for n in N_PRODUCTS:
     t = time.perf_counter()
     while registered < n:
-        f = pool[registered - 1]
-        pipe.register(registered, resized(f"data/abo_negatives/{f}", 1024, f"{OUT}/scale_reg.png"), [])
+        pipe.register(registered, resized(pool[registered - 1], 1024, f"{OUT}/scale_reg_{registered}.png"), [])
         registered += 1
     t_reg = (time.perf_counter() - t)
     res = pipe.analyse(rot)

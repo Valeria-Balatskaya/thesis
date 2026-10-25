@@ -14,7 +14,13 @@ AI edits) back to the seller/product it came from. The author develops on a Mac
 - `src/hidden_v2.py`, `src/training/train_v2.py` — HiDDeN v2: residual-style training,
   fixed PSNR budget (residual rescaled to target, no image loss), differentiable
   distortions (real JPEG, perspective, colour, crop, rescale, screenshot, print-photo),
-  63-bit payload. Train in Colab with `notebooks/train_hidden_v2.ipynb`
+  63-bit payload. Train in Colab with `notebooks/train_hidden_v2.ipynb` (RUN='v3', guide in
+  `docs/colab_v3.md`). v3 options, all default off so v2 is bit-identical: `mask_type` flat|nvf
+  (noise visibility function), `mask_floor`, `zero_white`, `mask_renorm`, `headroom`,
+  distortion set v3 (+levels), `overwrite_prob`; train_v2 takes several `--data` folders with
+  `--data-weights`, validates per source, saves every `--save-every` steps
+- `data_manifests/` — product-level ABO train/eval split (0 shared images/products), from
+  `scripts/fetch_reference_images.py manifest`; `... train` downloads it (Colab)
 - `src/bch.py`, `src/payload.py` — BCH(63,30,t=6); payload = 20-bit product ID +
   10-bit HMAC tag, XOR mask. Blind detection, theoretical FPR 8.6e-6 per image
 - `src/hidden_v2_inference.py` — `embed_product` / `read_product` (blind, no original needed)
@@ -30,7 +36,13 @@ AI edits) back to the seller/product it came from. The author develops on a Mac
   UN-watermarked original) -> 4 read again; with one candidate product the bits may
   also be matched to its known codewords (<= ~11 errors at FPR 1e-6 instead of BCH's 6).
   Verdicts: `watermark`, `watermark_aligned`, `fingerprint_only`, `none`.
-  `informed_score()` = non-blind check for one copy's exact residual (ownership disputes)
+  `informed_score()` = non-blind check for one copy's exact residual (legacy, 8 decoys);
+  `InformedChecker` = calibrated version (z vs 500 never-issued copies, `Z_THRESHOLD` 4);
+  `ownership_check()` = informed v2 + DCT layer; `analyse(verify_content=True)` = copy-attack
+  check (suspect must show the registered picture of the decoded ID -> `watermark_unbound`)
+- `src/dct_layer.py` — second, keyed watermark: Cox spread spectrum on 1,000 luminance DCT
+  coefficients, carrier = HMAC(key, copy ID), pure luminance delta (v2's colour untouched).
+  Informed detection (needs the reference it was embedded on, suspect aligned)
   A product has several *copies*, each with its own watermark ID (leak tracing)
 - `src/modern_attacks.py` — off-centre crop, rotate, mirror, perspective, page
   screenshot, phone photo of screen, messenger recompress, promo overlay, inpaint,
@@ -38,7 +50,10 @@ AI edits) back to the seller/product it came from. The author develops on a Mac
   `pip install -r requirements-ai.txt`
 - `app/` — **TraceMark** web app (FastAPI + SQLite, single-page UI in `app/static/index.html`):
   `main.py` routes, `guard.py` service (protect / analyse / attack lab, `STRENGTH = 0.5`;
-  `precheck()` refuses uploads that are already watermarked or registered -> HTTP 409),
+  `precheck()` refuses uploads that are already watermarked or registered -> HTTP 409;
+  `TRACEMARK_DCT_LAYER=1` adds the DCT layer; fingerprint_only scans run the ownership check),
+  `registry_log.py` (Ed25519-signed, hash-chained registration log, optional RFC 3161 via
+  `TRACEMARK_TSA_URL`; shown on `/report/{id}`; key in `<TRACEMARK_DATA>/keys`),
   `store.py` DB (`app/data/tracemark.db`, git-ignored), `crawler.py` web monitor
   (watchlist crawl + scheduler; `/demo/shop` is a generated thief page to crawl),
   `/report/{id}` printable evidence report. `service.py`, `database.py`, `thesis.db`
@@ -160,6 +175,35 @@ Supervisor Q2. Baseline 39/40 read blind (one busy ABO photo fails, pipeline rec
   Craver et al. 1997/1998. Not covered: an attacker running their own copy of the model with
   another key outside our server (pre-check doesn't apply there).
 
+## Meeting 2 results (2026-10-25/26, v2 checkpoint only; details in docs/supervisor_questions.md)
+- **Texture masks** (`tests/test_texture_masks.py`, 0.7, 30 own + 30 ABO x 12 attacks): ABO
+  blind/full: none 93.9/97.2 (dE flat 1.67), flat 0.3 81.9/91.4 (0.62), NVF 0.0 44.2/63.1
+  (0.005), **NVF 0.1 + renorm 82.8/92.8 (0.29)**, flat 0.3 + headroom 2 87.8/94.2 (0.93). Own
+  photos collapse with texture-only (NVF 0.0 39.7% full) because phones/boxes are smooth.
+  Untrained masking kills robustness; v3 trains with NVF 0.1 + zero_white + renorm. All 9
+  failing photos at the app setting are ABO; worst = small product on big white (8-31% product).
+- **Aspect ratios** 6:7, 1:2 (`tests/test_aspect_ratios.py`): square crop on ABO 51 -> 53/60;
+  0/1,667 clean false positives both lists; theoretical 6.0e-5 -> 7.7e-5 per image.
+- **DCT layer** (`tests/test_overwrite_defences.py`, 20 own + 20 ABO): -2.6 dB PSNR, dE +0.05,
+  v2 robustness unchanged. Thief re-protects with v2: ownership (informed or DCT) 39-40/40 same
+  strength, 34-37/40 full strength (v2 alone 0/40), 36-38/40 twice. DCT lost under crop, print,
+  native screenshot, instagram (0-3/40), brightness ~50%. False positives: informed 0/240 (max z
+  3.07), DCT 0/480 (max sim 2.8).
+- **Calibrated informed check** in `test_rewatermark.py`: other systems/visible marks 40/40
+  (median z ~7.5); our v2 again same strength 33-34/40, full strength 0/40, 2-3 layers 0-5/40
+  (the 8-decoy version had said 40, 30-32, 38-40 - it was too optimistic).
+- **Copy attack** (`tests/test_copy_attack.py`, 40 photos): exact residual transplants read
+  39-40/40 blind; content binding flags them all, 0/240 framed; cost 1/480 genuine copies.
+  pHash-bound tag rejected: pHash exact match only 195/480 attacked genuine copies.
+- **Overhead** (`tests/test_overhead.py`, M1 Pro): embed 0.04/0.12/0.52 s CPU at 512/1024/2048
+  px (MPS 0.02/0.06/0.21); blind hit 0.02-0.07 s; full pipeline 1,000 products 5.4 s (linear,
+  ~5 ms/product) -> needs a global embedding index for marketplace scale.
+- **Parameter study** (`tests/test_parameter_study.py`, 30 ABO): strength 0.3-1.0 x mask
+  none/flat 0.3/flat 0.0; at equal whole-image dE masking does not add robustness, it moves the
+  change off the background. Table/chart in output/parameter_study*.
+- Runs in parallel thrash the CPU (two torch processes -> 10-50x slower). Run benchmarks one at
+  a time.
+
 ## Working rules learned the hard way
 - The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
   seed it. Test with `TRACEMARK_DATA=<other folder> uvicorn app.main:app --port 8765`.
@@ -179,8 +223,11 @@ Supervisor Q2. Baseline 39/40 read blind (one busy ABO photo fails, pipeline rec
    TinEye) into `app/crawler.py`; today it only crawls a watchlist
 9. ✅ Supervisor Q1/Q2: e-commerce image analysis + re-watermarking test + upload pre-check
    (docs/supervisor_questions.md). v3 training should now include ABO product photos
-10. **Next:** full Colab run of v3 (colour charge + flat-area mask), then re-run
-   `test_hidden_v2_eval.py`, `test_defence_benchmark.py`, `test_in_the_wild.py` on it
+10. ✅ Meeting 2 prep: v3 data/options/notebook, texture masks, DCT layer, calibrated informed
+   check, registration log, copy-attack check, overhead + parameter study
+11. **Next:** user runs v3 in Colab (docs/colab_v3.md); then re-run test_hidden_v2_eval,
+   test_texture_masks, test_ecommerce_vs_regular, test_defence_benchmark, test_overwrite_defences
+   on hidden_v3_best.pt. Later: key-conditioned model, C2PA soft binding, global retrieval index
 
 ## HiDDeN v2 training notes
 - HiDDeN's plain design (spatially constant message map + pooled decoder) stalled at
@@ -218,4 +265,5 @@ Supervisor Q2. Baseline 39/40 read blind (one busy ABO photo fails, pipeline rec
 - Report numbers honestly, including failures — they go into the thesis discussion.
 - Keep legacy code paths so earlier results stay reproducible.
 - Don't commit large generated files (`results/`, `output/` are git-ignored).
-- Work happens on branch `claude/keen-gauss-dwwse7` (PR #1).
+- Work happens on feature branches merged to main (PR #1, #2 merged; current:
+  `feature/v3-prep-and-overwrite-defences`).
