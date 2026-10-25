@@ -37,12 +37,13 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app import crawler, guard, store
+from app import crawler, guard, registry_log, store
 from src.distractor_gen import generate_distractor
 from src.payload import blind_false_positive_rate, max_errors_for_fpr, PAYLOAD_BITS, ECC_T
 
 app = FastAPI(title="TraceMark")
 store.init_db()
+registry_log.init_table()
 crawler.start_scheduler()
 
 
@@ -263,6 +264,51 @@ _VERDICT_TEXT = {
 }
 
 
+@app.get("/api/registry/public-key")
+def api_registry_public_key():
+    return {"algorithm": "Ed25519", "public_key_pem": registry_log.public_key_pem()}
+
+
+@app.get("/api/registry/verify")
+def api_registry_verify():
+    return registry_log.verify_chain()
+
+
+def _registration_section(copy_id: int | None, e) -> str:
+    """Evidence-report block: the copy's signed, chained registration record."""
+    if copy_id is None:
+        return "<p class='note'>No copy identified, so no registration record applies.</p>"
+    v = registry_log.verify_copy(copy_id)
+    if v is None:
+        return ("<p class='note'>This copy was issued before the registration log existed; "
+                "no signed record is available.</p>")
+    r = v["record"]
+    ok = lambda b: ("<b style='color:#17663a'>verified</b>" if b
+                    else "<b style='color:#a01919'>FAILED</b>")
+    chain = v["chain"]
+    chain_txt = (f"{ok(True)} — records 1 to {r['seq']} intact" if chain["ok"]
+                 else f"{ok(False)} — {e(chain['first_error'])}")
+    tsa = v["tsa"]
+    tsa_row = ("<tr><th>Trusted timestamp</th><td>not requested (RFC 3161 is optional)</td></tr>"
+               if tsa is None else
+               f"<tr><th>Trusted timestamp</th><td>{ok(tsa['ok'])} — {e(tsa.get('time') or '')} "
+               f"(RFC 3161, external authority)</td></tr>")
+    return f"""<table>
+<tr><th>Registered (UTC)</th><td>{e(r['created_at'])} — record #{r['seq']} of the log</td></tr>
+<tr><th>Registered to</th><td>seller #{r['seller_id']}, product #{r['product_id']}, copy #{r['copy_id']}</td></tr>
+<tr><th>SHA-256 of original</th><td><code>{e(r['sha256_original'])}</code> {ok(v['original_matches'])}</td></tr>
+<tr><th>SHA-256 of issued copy</th><td><code>{e(r['sha256_copy'])}</code> {ok(v['copy_matches'])}</td></tr>
+<tr><th>Record hash</th><td><code>{e(r['record_hash'])}</code></td></tr>
+<tr><th>Previous record hash</th><td><code>{e(r['prev_hash'])}</code></td></tr>
+<tr><th>Ed25519 signature</th><td>{ok(chain['ok'])}</td></tr>
+<tr><th>Hash chain</th><td>{chain_txt}</td></tr>
+{tsa_row}
+</table>
+<p class="note">Each record is signed with the service's Ed25519 key (public key at
+<code>/api/registry/public-key</code>) and contains the hash of the record before it, so no
+registration can be changed, removed or back-dated without breaking every later record.</p>"""
+
+
 @app.get("/report/{detection_id}", response_class=HTMLResponse)
 def report(detection_id: int):
     d = _need(store.get_detection(detection_id), "detection")
@@ -290,6 +336,15 @@ def report(detection_id: int):
         else:
             facts.append(f"After alignment {verify['bit_errors']} of {PAYLOAD_BITS} bits differed from this "
                          f"copy's code; up to {verify['limit']} are accepted at a false-positive rate of 1e-6.")
+
+    own = d["details"].get("ownership")
+    if own:
+        for o in own:
+            parts = [f"v2 informed z = {o['informed_z']:.1f} (threshold 4)"]
+            if o["dct_sim"] is not None:
+                parts.append(f"DCT layer similarity = {o['dct_sim']:.1f} (threshold 6)")
+            facts.append(f"Ownership check for copy #{o['copy_id']} ({o['label']}): "
+                         f"{'PRESENT' if o['owned'] else 'not found'} — " + ", ".join(parts) + ".")
 
     def img(url, caption):
         return (f'<figure><img src="{e(url)}"><figcaption>{e(caption)}</figcaption></figure>'
@@ -328,6 +383,8 @@ def report(detection_id: int):
 <h2>How it was established</h2>
 <p>{e(explanation)}</p>
 <ul>{''.join(f'<li>{e(f)}</li>' for f in facts)}</ul>
+<h2>Registration record</h2>
+{_registration_section(d['copy_id'], e)}
 <h2>Images</h2>
 <div class="imgs">
 {img(guard.media_url(d['original_path']), 'Registered original (held by the service)')}

@@ -3,6 +3,7 @@
 # run attacks for the Attack Lab, record detections.
 
 import hashlib
+import os
 import threading
 import time
 import uuid
@@ -12,9 +13,10 @@ from urllib.parse import urlparse
 import numpy as np
 from PIL import Image
 
-from app import store
+from app import registry_log, store
 from src import attacks, ecommerce_attacks as ea, modern_attacks as ma
-from src.defence import DefencePipeline
+from src.defence import DefencePipeline, ownership_check
+from src import dct_layer
 from src.hidden_v2_inference import HiddenV2Model
 from src.metrics import compute as quality
 from src.payload import (encode_product_id, blind_false_positive_rate, ID_BITS, TAG_BITS,
@@ -39,6 +41,13 @@ MAX_SIDE = 1600                       # uploads are downscaled to this
 # values is measured by tests/test_defence_benchmark.py <folder> 35 0.7 0.3.
 # A v3 checkpoint has the masking built in and is used as trained.
 STRENGTH, MASK_FLOOR = (1.0, None) if "v3" in CHECKPOINT else (0.7, 0.3)
+
+# Optional second watermark layer (keyed DCT spread spectrum in luminance,
+# src/dct_layer.py): survives someone re-protecting the image with v2, where the
+# colour watermark is overwritten (tests/test_overwrite_defences.py: ownership
+# 34-40/40 with it vs 0-34/40 without). Costs ~2.6 dB PSNR (dE +0.05), so it is
+# opt-in: TRACEMARK_DCT_LAYER=1.
+DCT_LAYER = os.environ.get("TRACEMARK_DCT_LAYER", "0") == "1"
 
 for sub in ("originals", "copies", "diff", "lab", "scans", "crawl", "aligned", "demo"):
     (DATA / sub).mkdir(parents=True, exist_ok=True)
@@ -113,13 +122,45 @@ def create_copy(product_id: int, label: str) -> dict:
     with _lock:
         p.model.embed_product(product["original_path"], copy_id, str(path),
                               strength=STRENGTH, mask_floor=MASK_FLOOR)
+    if DCT_LAYER:
+        # keep the v2-only image: it is the reference the DCT layer is detected against
+        ref = dct_reference_path(copy_id, product_id)
+        path.rename(ref)
+        layered = dct_layer.embed(np.asarray(Image.open(ref).convert("RGB")), copy_id)
+        Image.fromarray(layered).save(path, format="PNG")
     q = quality(product["original_path"], str(path))
     store.finish_copy(copy_id, str(path), q["PSNR_dB"], q["SSIM"])
+    registry_log.append(copy_id)       # signed, hash-chained registration record
     _write_diff(product["original_path"], str(path), DATA / "diff" / f"c{copy_id}.png")
     with _lock:
         p.register(product_id, product["original_path"],
                    [c["id"] for c in store.list_copies(product_id)])
     return copy_json(store.get_copy(copy_id))
+
+
+def dct_reference_path(copy_id: int, product_id: int) -> Path:
+    return DATA / "copies" / f"p{product_id}_c{copy_id}_dctref.png"
+
+
+def ownership(product_id: int, aligned_rgb: np.ndarray) -> list[dict]:
+    """
+    For a suspect that shows a registered picture but whose watermark could not be
+    read (verdict fingerprint_only, e.g. re-protected by someone else): run the
+    informed ownership check for every copy of the product.
+    """
+    product = store.get_product(product_id)
+    original = np.asarray(Image.open(product["original_path"]).convert("RGB"))
+    model = pipeline().model          # takes _lock itself: fetch before locking
+    out = []
+    for c in store.list_copies(product_id):
+        ref = dct_reference_path(c["id"], product_id)
+        ref_rgb = np.asarray(Image.open(ref).convert("RGB")) if ref.exists() else None
+        with _lock:
+            r = ownership_check(model, aligned_rgb, original, c["id"], ref_rgb)
+        out.append({"copy_id": c["id"], "label": c["label"], "owned": r["owned"],
+                    "informed_z": r["informed"]["z"] if r["informed"] else None,
+                    "dct_sim": r["dct"]["sim"] if r["dct"] else None})
+    return out
 
 
 class AlreadyProtected(Exception):
@@ -263,12 +304,16 @@ def analyse(suspect_path: str, page_url: str | None = None, image_url: str | Non
         out["aligned_url"] = media_url(aligned_path)
 
     out["authorized"] = is_authorized(product["id"], page_url)
+    out["ownership"] = None
+    if res["verdict"] == "fingerprint_only" and res["aligned"] is not None:
+        out["ownership"] = ownership(product["id"], res["aligned"])
     if record:
         out["detection_id"] = store.record_detection(
             product_id=product["id"], copy_id=res["copy_id"], verdict=res["verdict"],
             image_url=image_url, page_url=page_url, snapshot_path=suspect_path,
             aligned_path=aligned_path, authorized=out["authorized"],
-            details={"stages": res["stages"], "sha256": sha256(suspect_path)})
+            details={"stages": res["stages"], "sha256": sha256(suspect_path),
+                     "ownership": out["ownership"]})
     return out
 
 

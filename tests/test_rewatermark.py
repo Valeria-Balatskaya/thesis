@@ -12,9 +12,15 @@
 #                  diagonal "stock photo" watermark
 #   layers         2 and 3 watermarks stacked (other systems, and v2 on v2)
 #
+# Ownership evidence when the blind decoder fails: the calibrated informed
+# check (src/defence.InformedChecker, z-score against 500 never-issued copies,
+# hit if z >= Z_THRESHOLD). The DCT luminance layer is tested in
+# tests/test_overwrite_defences.py.
+#
 # Every case is read clean and after a JPEG q70 re-save (what any platform does
 # next). For each read we report whether OUR copy ID, the THIEF's ID, or nothing
 # comes back, blind and with the full Retrieve-Align-Verify pipeline.
+# (Before 2026-10-25 the informed check compared against only 8 decoys.)
 #
 # In the v2-on-v2 cases the thief's copy is registered in the same pipeline, as
 # it would be if the thief protected the stolen image in the same TraceMark
@@ -35,7 +41,7 @@ from PIL import Image, ImageDraw
 
 from src.hidden_v2_inference import HiddenV2Model
 from src.hidden_inference import HiddenModel
-from src.defence import DefencePipeline, informed_score
+from src.defence import DefencePipeline, InformedChecker, Z_THRESHOLD
 from src.metrics import compute
 from src import attacks, lsb
 from src.dct_watermark import embed as dct_embed
@@ -148,24 +154,19 @@ def load_set(folder, n, tag):
 
 
 originals = load_set("data/products_png", N_OWN, "own") + load_set("data/abo_sample", N_ABO, "abo")
-N_DECOYS = 8   # copies never issued: the null distribution of the informed check
-
-
 def rgb(p):
     return np.asarray(Image.open(p).convert("RGB"))
 
 
-ours, decoys = {}, {}
+ours, checkers = {}, {}
 pipe = DefencePipeline(v2)
 for i, orig in enumerate(originals):
     wm = f"{OUT}/{i:03d}_ours.png"
     v2.embed_product(orig, 1000 + i, wm, strength=STRENGTH, mask_floor=MASK)
     ours[i] = wm
     pipe.register(i, orig, [1000 + i])
-    decoys[i] = []
-    for d in range(N_DECOYS):
-        v2.embed_product(orig, 900_000 + d, f"{OUT}/decoy.png", strength=STRENGTH, mask_floor=MASK)
-        decoys[i].append(rgb(f"{OUT}/decoy.png"))
+    # calibrated informed check (Part B2): z against 500 never-issued copies
+    checkers[i] = InformedChecker(v2, rgb(orig), 1000 + i, n_null=500)
 
 
 def outcome(copy_id, i):
@@ -200,16 +201,14 @@ for case, group, fn in CASES:
                 pfn(stacked, sus, **kw)
             blind = v2.read_product(sus)["product_id"]
             res = pipe.analyse(sus)
-            s_rgb, o_rgb = rgb(sus), rgb(orig)
-            inf_ours = informed_score(s_rgb, o_rgb, rgb(ours[i]))
-            inf_decoy = max(informed_score(s_rgb, o_rgb, d) for d in decoys[i])
+            inf = checkers[i].test(rgb(sus))
             rows.append({"case": case, "group": group, "image": i, "post": post,
                          "psnr_vs_ours": q["PSNR_dB"],
                          "blind": outcome(blind, i),
                          "pipeline": outcome(res["copy_id"], i),
                          "pipeline_verdict": res["verdict"],
-                         "informed_ours": round(inf_ours, 3),
-                         "informed_decoy_max": round(inf_decoy, 3)})
+                         "informed_z": inf["z"],
+                         "informed_hit": int(inf["z"] >= Z_THRESHOLD)})
         if case in V2_CASES:
             pipe.forget(thief_pid)
     print(f"{case:<22} done ({time.time() - t0:.0f}s)", flush=True)
@@ -236,7 +235,7 @@ with open("output/rewatermark_rows.csv", "w", newline="") as f:
 summary = []
 n = len(originals)
 print(f"\n{n} product photos ({N_OWN} own + {N_ABO} ABO), ours = v2 at {STRENGTH}/{MASK}\n")
-print(f"{'case':<22}{'post':<10}{'PSNR':>6}  {'blind: ours/theirs/none':>24}  {'pipeline: ours/theirs/none':>27}  informed: ours>decoys")
+print(f"{'case':<22}{'post':<10}{'PSNR':>6}  {'blind: ours/theirs/none':>24}  {'pipeline: ours/theirs/none':>27}  informed z>=thr (median z)")
 for case, group, _ in CASES:
     for post, _, _ in POST:
         sub = [r for r in rows if r["case"] == case and r["post"] == post]
@@ -249,15 +248,14 @@ for case, group, _ in CASES:
              "pipe_ours": cnt("pipeline", "ours"), "pipe_theirs": cnt("pipeline", "theirs"),
              "pipe_nothing": cnt("pipeline", "nothing"), "pipe_other": cnt("pipeline", "other_id"),
              "pipe_fingerprint_only": sum(r["pipeline_verdict"] == "fingerprint_only" for r in sub),
-             "informed_wins": sum(r["informed_ours"] > r["informed_decoy_max"] for r in sub),
-             "informed_ours_median": round(float(np.median([r["informed_ours"] for r in sub])), 3),
-             "informed_decoy_max_median": round(float(np.median([r["informed_decoy_max"] for r in sub])), 3),
-             "informed_min_margin": round(float(min(r["informed_ours"] - r["informed_decoy_max"] for r in sub)), 3)}
+             "informed_hits": sum(r["informed_hit"] for r in sub),
+             "informed_z_median": round(float(np.median([r["informed_z"] for r in sub])), 2),
+             "informed_z_min": round(float(min(r["informed_z"] for r in sub)), 2)}
         summary.append(s)
         print(f"{case:<22}{post:<10}{s['psnr_vs_ours']:>6}  "
               f"{s['blind_ours']:>8}/{s['blind_theirs']}/{s['blind_nothing']:<10}"
               f"{s['pipe_ours']:>12}/{s['pipe_theirs']}/{s['pipe_nothing']:<6}"
-              f"{s['informed_wins']:>10}/{s['n']} (med {s['informed_ours_median']} vs {s['informed_decoy_max_median']})"
+              f"{s['informed_hits']:>10}/{s['n']} (median z {s['informed_z_median']})"
               + (f"  (other id {s['blind_other']}/{s['pipe_other']})" if s['blind_other'] or s['pipe_other'] else ""))
 
 with open("output/rewatermark_summary.csv", "w", newline="") as f:

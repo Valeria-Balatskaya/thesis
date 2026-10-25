@@ -13,8 +13,13 @@ from src.hidden_v2 import HiDDeNv2
 from src.payload import encode_product_id, decode_payload, PAYLOAD_BITS
 
 
-# Original aspect ratios tried when a suspect looks centre-cropped
-ASPECT_RATIOS = [(4, 3), (3, 4), (3, 2), (2, 3), (16, 9), (9, 16)]
+# Original aspect ratios tried when a suspect looks centre-cropped.
+# LEGACY = the list used for all results before 2026-10-25. The extended list
+# adds Amazon's common tall formats (6:7 = 1879x2200, 1:2), which were the only
+# marketplace_square misses on ABO photos. Each extra ratio is one more chance
+# of a blind false positive (tests/test_v3_prep.py measures the cost).
+LEGACY_ASPECT_RATIOS = [(4, 3), (3, 4), (3, 2), (2, 3), (16, 9), (9, 16)]
+ASPECT_RATIOS = LEGACY_ASPECT_RATIOS + [(6, 7), (1, 2)]
 
 
 class HiddenV2Model:
@@ -29,7 +34,11 @@ class HiddenV2Model:
         self.target_psnr = ckpt["target_psnr"]
         self.model = HiDDeNv2(self.msg_len, self.image_size, self.target_psnr,
                               ckpt.get("chroma_weight", 1.0),
-                              ckpt.get("mask_floor", 1.0)).to(device)
+                              ckpt.get("mask_floor", 1.0),
+                              mask_type=ckpt.get("mask_type", "flat"),
+                              zero_white=ckpt.get("zero_white", False),
+                              mask_renorm=ckpt.get("mask_renorm", False),
+                              headroom=ckpt.get("headroom", 0)).to(device)
         self.model.load_state_dict(ckpt["model"])
         self.model.eval()
 
@@ -39,16 +48,18 @@ class HiddenV2Model:
 
     @torch.no_grad()
     def embed_bits(self, image_path: str, bits, output_path: str,
-                   strength: float = 1.0, mask_floor: float | None = None) -> None:
+                   strength: float = 1.0, mask_floor: float | None = None,
+                   **mask_options) -> None:
         """
         Embed msg_len raw bits. strength scales the residual (1.0 = target_psnr).
-        mask_floor < 1 weakens the watermark on flat areas (see hidden_v2.texture_mask);
-        None uses whatever the checkpoint was trained with.
+        mask_floor < 1 weakens the watermark on flat areas (see hidden_v2.embedding_mask);
+        None uses whatever the checkpoint was trained with. mask_options:
+        mask_type ("flat" | "nvf" | "none"), zero_white, mask_renorm, headroom.
         """
         message = torch.tensor(np.asarray(bits), dtype=torch.float32,
                                device=self.device).view(1, self.msg_len)
         out = self.model.watermark(self._load(image_path), message, strength,
-                                   mask_floor=mask_floor)
+                                   mask_floor=mask_floor, **mask_options)
         out = (out.squeeze(0).permute(1, 2, 0).cpu().numpy() * 255).round()
         Image.fromarray(out.astype(np.uint8)).save(output_path, format="PNG")
 
@@ -63,14 +74,16 @@ class HiddenV2Model:
     # ─── product-ID payload (BCH protected, see src/payload.py) ───
 
     def embed_product(self, image_path: str, product_id: int, output_path: str,
-                      strength: float = 1.0, mask_floor: float | None = None) -> dict:
+                      strength: float = 1.0, mask_floor: float | None = None,
+                      **mask_options) -> dict:
         if self.msg_len != PAYLOAD_BITS:
             raise ValueError(f"checkpoint embeds {self.msg_len} bits, payload needs {PAYLOAD_BITS}")
         self.embed_bits(image_path, encode_product_id(product_id), output_path, strength,
-                        mask_floor)
+                        mask_floor, **mask_options)
         return {"product_id": product_id, "output_path": output_path}
 
-    def read_product(self, image_path: str, try_aspects: bool = True) -> dict:
+    def read_product(self, image_path: str, try_aspects: bool = True,
+                     aspect_ratios: list | None = None) -> dict:
         """
         Blind detection. product_id is None when no valid watermark is found.
 
@@ -86,7 +99,7 @@ class HiddenV2Model:
         if result["product_id"] is not None or not try_aspects:
             return result
         _, _, h, w = x.shape
-        for aw, ah in ASPECT_RATIOS:
+        for aw, ah in (ASPECT_RATIOS if aspect_ratios is None else aspect_ratios):
             # Smallest canvas of that aspect ratio that contains the image
             new_w, new_h = max(w, round(h * aw / ah)), max(h, round(w * ah / aw))
             if (new_w, new_h) == (w, h):

@@ -130,6 +130,9 @@ data/coco/
 data/products/
 data/products_png/
 data/abo_sample/
+data/abo_train/
+data/abo_negatives/
+data/abo_meta/
 data/coco_sample/
 
 # TraceMark app runtime data
