@@ -361,7 +361,8 @@ class InformedChecker:
                 chunk = ids[start:start + 128]
                 msgs = torch.tensor(np.stack([_codeword_any(c) for c in chunk]),
                                     dtype=torch.float32, device=model.device)
-                wm = model.model.watermark(x.expand(len(chunk), -1, -1, -1), msgs, **kw)
+                wm = model.model.watermark(x.expand(len(chunk), -1, -1, -1), msgs,
+                                           key=model.key(len(chunk)), **kw)
                 refs.append((wm - x).cpu().numpy().reshape(len(chunk), -1))
         refs = np.concatenate(refs)
         self.clip = 4 * float(refs[0].std()) + 1e-6

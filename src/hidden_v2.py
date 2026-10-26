@@ -37,9 +37,10 @@ class EncoderV2(nn.Module):
 
     PROJ_CH, PROJ_SIZE = 3, 64
 
-    def __init__(self, msg_len: int, channels: int = 64):
+    def __init__(self, msg_len: int, channels: int = 64, key_dim: int = 0):
         super().__init__()
         self.msg_len = msg_len
+        self.key_dim = key_dim
         self.pre = nn.Sequential(
             ConvBNRelu(3, channels),
             ConvBNRelu(channels, channels),
@@ -55,19 +56,33 @@ class EncoderV2(nn.Module):
         # training stalls around 60% bit accuracy.
         self.msg_proj = nn.Linear(msg_len, self.PROJ_CH * self.PROJ_SIZE ** 2)
         self.post = nn.Sequential(
-            ConvBNRelu(channels + 3 + msg_len + self.PROJ_CH, channels),
+            ConvBNRelu(channels + 3 + msg_len + self.PROJ_CH + key_dim, channels),
             ConvBNRelu(channels, channels),
             nn.Conv2d(channels, 3, kernel_size=1),
         )
+        if key_dim:
+            # v4: the secret key modulates the per-bit carrier pattern, so the same
+            # message written with another key lands on a different pattern.
+            # Zero-initialised: a warm start from v3 begins as exactly v3.
+            self.key_mod = nn.Linear(key_dim, self.PROJ_CH * self.PROJ_SIZE ** 2)
+            nn.init.zeros_(self.key_mod.weight)
+            nn.init.zeros_(self.key_mod.bias)
 
-    def forward(self, image: torch.Tensor, message: torch.Tensor) -> torch.Tensor:
+    def forward(self, image: torch.Tensor, message: torch.Tensor,
+                key: torch.Tensor | None = None) -> torch.Tensor:
         b, _, h, w = image.shape
         signed = message * 2 - 1
         msg_map = signed.view(b, self.msg_len, 1, 1).expand(-1, -1, h, w)
-        pattern = self.msg_proj(signed).view(b, self.PROJ_CH, self.PROJ_SIZE, self.PROJ_SIZE)
+        pattern = self.msg_proj(signed)
+        extra = []
+        if self.key_dim:
+            k = key * 2 - 1
+            pattern = pattern * (1 + torch.tanh(self.key_mod(k)))
+            extra = [k.view(b, self.key_dim, 1, 1).expand(-1, -1, h, w)]
+        pattern = pattern.view(b, self.PROJ_CH, self.PROJ_SIZE, self.PROJ_SIZE)
         pattern = F.interpolate(pattern, size=(h, w), mode="bilinear", align_corners=False)
         feats = self.pre(image)
-        return self.post(torch.cat([feats, image, msg_map, pattern], dim=1)) + pattern
+        return self.post(torch.cat([feats, image, msg_map, pattern, *extra], dim=1)) + pattern
 
 
 class DecoderV2(nn.Module):
@@ -82,9 +97,10 @@ class DecoderV2(nn.Module):
     GRID = 8
     FINE_CH, FINE_SIZE = 4, 64
 
-    def __init__(self, msg_len: int, channels: int = 64):
+    def __init__(self, msg_len: int, channels: int = 64, key_dim: int = 0):
         super().__init__()
         c = channels
+        self.key_dim = key_dim
         self.net = nn.Sequential(
             ConvBNRelu(3, c),
             ConvBNRelu(c, c),
@@ -108,12 +124,32 @@ class DecoderV2(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(512, msg_len),
         )
+        if key_dim:
+            # v4: FiLM conditioning on the secret key (Perez et al. 2018): the key
+            # scales and shifts the deep features and the matched-filter features,
+            # so the decoder only "hears" marks written with the same key.
+            # Zero-initialised (identity) so a warm start from v3 is exactly v3.
+            self.film_deep = nn.Linear(key_dim, 2 * 4 * c)
+            self.film_fine = nn.Linear(key_dim, 2 * self.FINE_CH)
+            for layer in (self.film_deep, self.film_fine):
+                nn.init.zeros_(layer.weight)
+                nn.init.zeros_(layer.bias)
 
-    def forward(self, image: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _film(x: torch.Tensor, params: torch.Tensor) -> torch.Tensor:
+        gamma, beta = params.chunk(2, dim=1)
+        return x * (1 + gamma[:, :, None, None]) + beta[:, :, None, None]
+
+    def forward(self, image: torch.Tensor, key: torch.Tensor | None = None) -> torch.Tensor:
         x = self.net(image * 2 - 1)
+        fine = self.fine(image * 2 - 1)
+        if self.key_dim:
+            k = key * 2 - 1
+            x = self._film(x, self.film_deep(k))
+            fine = self._film(fine, self.film_fine(k))
         pooled = x.mean(dim=(2, 3))
         grid = self.spatial(x).flatten(1)
-        fine = F.adaptive_avg_pool2d(self.fine(image * 2 - 1), self.FINE_SIZE).flatten(1)
+        fine = F.adaptive_avg_pool2d(fine, self.FINE_SIZE).flatten(1)
         return self.head(torch.cat([pooled, grid], dim=1)) + self.fine_head(fine)
 
 
@@ -417,7 +453,7 @@ class HiDDeNv2(nn.Module):
                  target_psnr: float = 40.0, chroma_weight: float = 1.0,
                  mask_floor: float = 1.0, mask_type: str = "flat",
                  zero_white: bool = False, mask_renorm: bool = False,
-                 headroom: int = 0, distortion_set: str = "v2"):
+                 headroom: int = 0, distortion_set: str = "v2", key_dim: int = 0):
         """
         chroma_weight: how much more a colour change counts against the quality
             budget than a brightness change. 1.0 = plain RGB budget. Trained at
@@ -433,6 +469,9 @@ class HiDDeNv2(nn.Module):
         headroom: pull pixels into [headroom, 255 - headroom] before embedding
             so an additive residual is not clipped at pure white / black.
         distortion_set: "v2" or "v3" (adds brightness/levels).
+        key_dim: > 0 makes the model key-conditioned (v4): the encoder writes and
+            the decoder reads with a secret key of key_dim bits. A copy of the
+            model without the key writes into a different channel.
         Defaults reproduce v2 exactly.
         """
         super().__init__()
@@ -445,8 +484,9 @@ class HiDDeNv2(nn.Module):
         self.zero_white = zero_white
         self.mask_renorm = mask_renorm
         self.headroom = headroom
-        self.encoder = EncoderV2(msg_len)
-        self.decoder = DecoderV2(msg_len)
+        self.key_dim = key_dim
+        self.encoder = EncoderV2(msg_len, key_dim=key_dim)
+        self.decoder = DecoderV2(msg_len, key_dim=key_dim)
         self.distort = Distortions(distortion_set)
 
     def _to_model_size(self, x: torch.Tensor) -> torch.Tensor:
@@ -460,7 +500,7 @@ class HiDDeNv2(nn.Module):
                   strength: float = 1.0, psnr: float | None = None,
                   mask_floor: float | None = None, mask_type: str | None = None,
                   zero_white: bool | None = None, mask_renorm: bool | None = None,
-                  headroom: int | None = None) -> torch.Tensor:
+                  headroom: int | None = None, key: torch.Tensor | None = None) -> torch.Tensor:
         """
         Full-resolution image [B,3,H,W] in [0,1] -> watermarked image, same size.
         The residual is zero-mean per channel (no global colour shift) and
@@ -468,7 +508,7 @@ class HiDDeNv2(nn.Module):
         changes counted chroma_weight times. `psnr` overrides the target
         (training curriculum); `mask_floor` overrides the model's masking.
         """
-        residual = self.encoder(self._to_model_size(image), message)
+        residual = self.encoder(self._to_model_size(image), message, key)
         residual = F.interpolate(residual, size=image.shape[-2:], mode="bicubic",
                                  align_corners=False)
         residual = residual - residual.mean(dim=(2, 3), keepdim=True)
@@ -496,16 +536,30 @@ class HiDDeNv2(nn.Module):
             image = image.clamp(h / 255, 1 - h / 255)
         return torch.clamp(image + residual, 0, 1)
 
-    def decode(self, image: torch.Tensor) -> torch.Tensor:
-        """Any-size image -> message logits."""
-        return self.decoder(self._to_model_size(image))
+    def decode(self, image: torch.Tensor, key: torch.Tensor | None = None) -> torch.Tensor:
+        """Any-size image -> message logits (key required for a key-conditioned model)."""
+        return self.decoder(self._to_model_size(image), key)
 
     def forward(self, image: torch.Tensor, message: torch.Tensor,
                 severity: float = 1.0, distortion: str | None = None,
-                psnr: float | None = None, overwrite_prob: float = 0.0):
-        watermarked = self.watermark(image, message, psnr=psnr)
+                psnr: float | None = None, overwrite_prob: float = 0.0,
+                key: torch.Tensor | None = None, other_key_prob: float = 0.0):
+        """
+        key: [B, key_dim] bits for a key-conditioned model.
+        other_key_prob: v4 augmentation - someone protects the published image with
+            the SAME model but ANOTHER key; the decoder with OUR key must still
+            return our message. The attacked image is kept in self.last_attacked
+            so the training loop can also test it with a wrong key.
+        """
+        watermarked = self.watermark(image, message, psnr=psnr, key=key)
         # Published files are 8-bit
         published = _round_ste(watermarked * 255) / 255
+        if self.key_dim and other_key_prob > 0 and random.random() < other_key_prob:
+            other = random_keys(image.size(0), self.key_dim, image.device, avoid=key)
+            second = torch.randint_like(message, 0, 2)
+            published = self.watermark(published, second, strength=_u(0.5, 1.5), psnr=psnr,
+                                       key=other)
+            published = _round_ste(published * 255) / 255
         if overwrite_prob > 0 and random.random() < overwrite_prob:
             # Overwrite augmentation: someone re-protects the published image
             # with the same model and a random message. The decoder must still
@@ -513,7 +567,52 @@ class HiDDeNv2(nn.Module):
             # embedding too, so the encoder can learn to reinforce a watermark
             # that is already present instead of writing over it.
             second = torch.randint_like(message, 0, 2)
-            published = self.watermark(published, second, strength=_u(0.5, 1.5), psnr=psnr)
+            published = self.watermark(published, second, strength=_u(0.5, 1.5), psnr=psnr,
+                                       key=key)
             published = _round_ste(published * 255) / 255
         attacked, name = self.distort(published, severity, distortion)
-        return watermarked, self.decode(attacked), name
+        self.last_attacked = attacked
+        return watermarked, self.decode(attacked, key), name
+
+
+def random_keys(batch: int, key_dim: int, device, avoid: torch.Tensor | None = None) -> torch.Tensor:
+    """Random key bits [batch, key_dim]; with `avoid`, guaranteed different per row."""
+    keys = torch.randint(0, 2, (batch, key_dim), device=device).float()
+    if avoid is not None:
+        same = (keys == avoid).all(dim=1)
+        keys[same, 0] = 1 - avoid[same, 0]
+    return keys
+
+
+def key_bits(secret: bytes, key_dim: int) -> torch.Tensor:
+    """Deployment key: the first key_dim bits of HMAC-SHA256(secret, 'model-key')."""
+    import hashlib
+    import hmac
+    digest = hmac.new(secret, b"model-key", hashlib.sha256).digest()
+    bits = [(byte >> (7 - i)) & 1 for byte in digest for i in range(8)][:key_dim]
+    return torch.tensor(bits, dtype=torch.float32)
+
+
+def load_warm_start(model: "HiDDeNv2", state: dict) -> list[str]:
+    """
+    Load a v2/v3 state dict into a (key-conditioned) model. Tensors that grew
+    (the encoder's input channels for the key map) get the old weights in their
+    first slots and zeros elsewhere; new key layers keep their zero init.
+    Returns the names that were not taken from `state`.
+    """
+    own = model.state_dict()
+    fresh = []
+    for name, tensor in own.items():
+        if name not in state:
+            fresh.append(name)
+            continue
+        old = state[name]
+        if old.shape == tensor.shape:
+            own[name] = old
+        else:
+            new = torch.zeros_like(tensor)
+            new[tuple(slice(0, d) for d in old.shape)] = old
+            own[name] = new
+            fresh.append(name + " (extended)")
+    model.load_state_dict(own)
+    return fresh

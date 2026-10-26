@@ -9,7 +9,9 @@ import numpy as np
 import torch
 from PIL import Image
 
-from src.hidden_v2 import HiDDeNv2
+import os
+
+from src.hidden_v2 import HiDDeNv2, key_bits
 from src.payload import encode_product_id, decode_payload, PAYLOAD_BITS
 
 
@@ -38,9 +40,20 @@ class HiddenV2Model:
                               mask_type=ckpt.get("mask_type", "flat"),
                               zero_white=ckpt.get("zero_white", False),
                               mask_renorm=ckpt.get("mask_renorm", False),
-                              headroom=ckpt.get("headroom", 0)).to(device)
+                              headroom=ckpt.get("headroom", 0),
+                              key_dim=ckpt.get("key_dim", 0)).to(device)
+        # v4 key-conditioned models read and write with a secret key derived from
+        # the server secret (WATERMARK_MODEL_KEY, else WATERMARK_KEY, else the demo key)
+        self.key_dim = ckpt.get("key_dim", 0)
+        secret = (os.environ.get("WATERMARK_MODEL_KEY") or os.environ.get("WATERMARK_KEY")
+                  or "thesis-demo-key").encode()
+        self._key = key_bits(secret, self.key_dim).to(device) if self.key_dim else None
         self.model.load_state_dict(ckpt["model"])
         self.model.eval()
+
+    def key(self, batch: int = 1) -> torch.Tensor | None:
+        """The deployment key repeated for a batch (None for v2/v3)."""
+        return None if self._key is None else self._key.expand(batch, -1)
 
     def _load(self, image_path: str) -> torch.Tensor:
         arr = np.array(Image.open(image_path).convert("RGB"), dtype=np.float32) / 255
@@ -59,13 +72,13 @@ class HiddenV2Model:
         message = torch.tensor(np.asarray(bits), dtype=torch.float32,
                                device=self.device).view(1, self.msg_len)
         out = self.model.watermark(self._load(image_path), message, strength,
-                                   mask_floor=mask_floor, **mask_options)
+                                   mask_floor=mask_floor, key=self.key(), **mask_options)
         out = (out.squeeze(0).permute(1, 2, 0).cpu().numpy() * 255).round()
         Image.fromarray(out.astype(np.uint8)).save(output_path, format="PNG")
 
     @torch.no_grad()
     def _decode_tensor(self, x: torch.Tensor) -> np.ndarray:
-        logits = self.model.decode(x).squeeze(0)
+        logits = self.model.decode(x, self.key(x.size(0))).squeeze(0)
         return (logits > 0).cpu().numpy().astype(np.uint8)
 
     def decode_bits(self, image_path: str) -> np.ndarray:

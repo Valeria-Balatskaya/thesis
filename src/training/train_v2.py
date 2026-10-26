@@ -27,6 +27,14 @@
 #   --headroom 2                pull pure white/black in by 2 levels before embedding
 #   --distortions v3            adds brightness/levels (white clipping)
 #   --overwrite-prob 0.15       re-embed a random second message; decoder must return the first
+#
+# v4 (key-conditioned) options:
+#   --key-dim 64                encoder writes / decoder reads with a secret key (random per image
+#                               in training; any 64-bit key works at deployment)
+#   --wrong-key-weight 0.5      with a WRONG key the decoder must output nothing (logits -> 0)
+#   --other-key-prob 0.3        someone protects the image with the same model but another key;
+#                               our key must still read our message
+#   --init-from hidden_v3_best.pt   warm start: new key layers start at zero = v3 exactly
 
 import argparse
 import math
@@ -37,7 +45,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset, ConcatDataset, WeightedRandomSampler
 
-from src.hidden_v2 import HiDDeNv2, Distortions
+from src.hidden_v2 import HiDDeNv2, Distortions, random_keys, load_warm_start
 from src.training.dataset import WatermarkDataset
 
 
@@ -62,6 +70,10 @@ def _lr(step: int, total_steps: int, base_lr: float) -> float:
     return base_lr * (0.02 + 0.98 * 0.5 * (1 + math.cos(math.pi * step / total_steps)))
 
 
+def _round_ste_eval(x: torch.Tensor) -> torch.Tensor:
+    return torch.round(x * 255) / 255
+
+
 @torch.no_grad()
 def validate_sources(model: HiDDeNv2, loaders: dict, device: str, ecc_t: int) -> dict:
     """validate() per data source; the combined entry averages the sources."""
@@ -69,8 +81,9 @@ def validate_sources(model: HiDDeNv2, loaders: dict, device: str, ecc_t: int) ->
     if len(per) == 1:
         return next(iter(per.values()))
     names = model.distort.names
+    keys = [k for k in next(iter(per.values())) if not k.startswith("_")]
     out = {n: {k: sum(v[n][k] for v in per.values()) / len(per) for k in ("bit_acc", "decodable")}
-           for n in names}
+           for n in keys}
     out["_mean_bit_acc"] = sum(v["_mean_bit_acc"] for v in per.values()) / len(per)
     out["_psnr"] = sum(v["_psnr"] for v in per.values()) / len(per)
     out["_sources"] = {k: {"mean_bit_acc": v["_mean_bit_acc"], "psnr": v["_psnr"],
@@ -91,22 +104,39 @@ def validate(model: HiDDeNv2, loader: DataLoader, device: str, ecc_t: int) -> di
     gen = torch.Generator().manual_seed(0)
     stats = {name: [0.0, 0.0, 0] for name in model.distort.names}
     psnr_sum, n_img = 0.0, 0
+    if model.key_dim:
+        stats.update({"wrong_key": [0.0, 0.0, 0], "other_key_overwrite": [0.0, 0.0, 0]})
     for image, _ in loader:
         image = image.to(device)
         message = torch.randint(0, 2, (image.size(0), model.msg_len),
                                 generator=gen).float().to(device)
-        for name in model.distort.names:
-            watermarked, logits, _ = model(image, message, 1.0, name)
+        key = (torch.randint(0, 2, (image.size(0), model.key_dim), generator=gen).float().to(device)
+               if model.key_dim else None)
+
+        def add(name, logits):
             errors = ((logits > 0).float() != message).sum(dim=1)
             stats[name][0] += (1 - errors.float() / model.msg_len).sum().item()
             stats[name][1] += (errors <= ecc_t).float().sum().item()
             stats[name][2] += image.size(0)
+
+        for name in model.distort.names:
+            watermarked, logits, _ = model(image, message, 1.0, name, key=key)
+            add(name, logits)
+        if model.key_dim:
+            # wrong key on a clean watermarked image: "decodable" here = a false read
+            clean = _round_ste_eval(watermarked)
+            add("wrong_key", model.decode(clean, random_keys(image.size(0), model.key_dim, device, avoid=key)))
+            # someone re-protects with another key at full strength; our key reads
+            other = random_keys(image.size(0), model.key_dim, device, avoid=key)
+            second = torch.randint(0, 2, message.shape, generator=gen).float().to(device)
+            over = _round_ste_eval(model.watermark(clean, second, key=other))
+            add("other_key_overwrite", model.decode(over, key))
         mse = ((watermarked - image) ** 2).mean(dim=(1, 2, 3)).clamp(min=1e-10)
         psnr_sum += (10 * torch.log10(1 / mse)).sum().item()
         n_img += image.size(0)
     model.train()
     out = {name: {"bit_acc": a / n, "decodable": d / n} for name, (a, d, n) in stats.items()}
-    out["_mean_bit_acc"] = sum(v["bit_acc"] for v in out.values()) / len(model.distort.names)
+    out["_mean_bit_acc"] = sum(out[n]["bit_acc"] for n in model.distort.names) / len(model.distort.names)
     out["_psnr"] = psnr_sum / n_img
     return out
 
@@ -139,6 +169,10 @@ def train(
     overwrite_prob: float = 0.0,
     data_weights: list | None = None,
     save_every: int = 2000,
+    key_dim: int = 0,
+    wrong_key_weight: float = 0.5,
+    other_key_prob: float = 0.0,
+    init_from: str | None = None,
     batch_size: int = 32,
     total_steps: int = 40000,
     lr: float = 1e-3,
@@ -191,11 +225,16 @@ def train(
     model = HiDDeNv2(msg_len=msg_len, image_size=image_size, target_psnr=target_psnr,
                      chroma_weight=chroma_weight, mask_floor=mask_floor,
                      mask_type=mask_type, zero_white=zero_white, mask_renorm=mask_renorm,
-                     headroom=headroom, distortion_set=distortion_set).to(device)
+                     headroom=headroom, distortion_set=distortion_set,
+                     key_dim=key_dim).to(device)
     params = list(model.encoder.parameters()) + list(model.decoder.parameters())
     opt = torch.optim.Adam(params, lr=lr)
 
     step, best_acc = 0, 0.0
+    if init_from and not (resume_from and os.path.exists(resume_from)):
+        fresh = load_warm_start(model, torch.load(init_from, map_location=device,
+                                                  weights_only=False)["model"])
+        print(f"[train_v2] warm start from {init_from}; new/extended: {len(fresh)} tensors")
     if resume_from and os.path.exists(resume_from):
         ckpt = torch.load(resume_from, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model"])
@@ -220,6 +259,10 @@ def train(
             "headroom": headroom,
             "distortion_set": distortion_set,
             "overwrite_prob": overwrite_prob,
+            "key_dim": key_dim,
+            "wrong_key_weight": wrong_key_weight,
+            "other_key_prob": other_key_prob,
+            "init_from": init_from,
             "data": [str(d) for d in image_dirs],
             "data_weights": data_weights,
             "best_acc": best_acc,
@@ -242,8 +285,17 @@ def train(
             psnr = _psnr(step, start_psnr, target_psnr, ramp_end)
             # overwrite augmentation only once the networks communicate at all
             ow = overwrite_prob if step >= warmup_steps else 0.0
-            _, logits, _ = model(image, message, severity, psnr=psnr, overwrite_prob=ow)
+            key = random_keys(image.size(0), key_dim, device) if key_dim else None
+            ok = other_key_prob if step >= warmup_steps else 0.0
+            _, logits, _ = model(image, message, severity, psnr=psnr, overwrite_prob=ow,
+                                 key=key, other_key_prob=ok)
             loss = F.binary_cross_entropy_with_logits(logits, message)
+            if key_dim and wrong_key_weight > 0:
+                # a wrong key must give no information: logits pushed to 0 (p = 0.5)
+                wrong = random_keys(image.size(0), key_dim, device, avoid=key)
+                wrong_logits = model.decode(model.last_attacked, wrong)
+                loss = loss + wrong_key_weight * F.binary_cross_entropy_with_logits(
+                    wrong_logits, torch.full_like(message, 0.5))
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, 1.0)
@@ -270,8 +322,14 @@ def train(
                 val = validate_sources(model, val_loaders, device, ecc_t)
                 _print_validation(step, val)
                 # "best" only counts once severity and quality are at their final values
-                if step >= ramp_end and val["_mean_bit_acc"] > best_acc:
-                    best_acc = val["_mean_bit_acc"]
+                score = val["_mean_bit_acc"]
+                if key_dim:
+                    # v4: also reward reading through another key's overwrite, and
+                    # penalise any decodable read with a wrong key (= false positive)
+                    score = (0.7 * score + 0.3 * val["other_key_overwrite"]["bit_acc"]
+                             - val["wrong_key"]["decodable"])
+                if step >= ramp_end and score > best_acc:
+                    best_acc = score
                     save("hidden_v2_best.pt", val=val)
                     print(f"[save] new best ({best_acc:.3f}) -> hidden_v2_best.pt")
                 save("hidden_v2_latest.pt", val=val)
@@ -302,6 +360,10 @@ if __name__ == "__main__":
     p.add_argument("--data-weights", type=float, nargs="+", default=None,
                    help="sampling share per --data folder, e.g. 0.5 0.5")
     p.add_argument("--save-every", type=int, default=2000)
+    p.add_argument("--key-dim", type=int, default=0, help="> 0: key-conditioned model (v4)")
+    p.add_argument("--wrong-key-weight", type=float, default=0.5)
+    p.add_argument("--other-key-prob", type=float, default=0.0)
+    p.add_argument("--init-from", default=None, help="warm start from a v2/v3 checkpoint")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--warmup-steps", type=int, default=2000)
     p.add_argument("--ramp-end", type=int, default=15000)
@@ -317,6 +379,8 @@ if __name__ == "__main__":
           zero_white=a.zero_white, mask_renorm=a.mask_renorm, headroom=a.headroom,
           distortion_set=a.distortions, overwrite_prob=a.overwrite_prob,
           data_weights=a.data_weights, save_every=a.save_every,
+          key_dim=a.key_dim, wrong_key_weight=a.wrong_key_weight,
+          other_key_prob=a.other_key_prob, init_from=a.init_from,
           lr=a.lr, warmup_steps=a.warmup_steps,
           ramp_end=a.ramp_end, val_every=a.val_every, log_every=a.log_every,
           checkpoint_dir=a.out, resume_from=a.resume, num_workers=a.workers,
