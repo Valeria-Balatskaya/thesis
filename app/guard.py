@@ -30,7 +30,9 @@ except ImportError:
 
 # hidden_v3_best.pt (trained with a colour charge and flat-area masking, see
 # notebooks/train_hidden_v2.ipynb) is preferred when present.
-CHECKPOINT = next((c for c in ("checkpoints/hidden_v3_best.pt", "checkpoints/hidden_v2_best.pt")
+# hidden_v4_best.pt (secret-key model) is preferred over v3, v3 over v2.
+CHECKPOINT = next((c for c in ("checkpoints/hidden_v4_best.pt", "checkpoints/hidden_v3_best.pt",
+                               "checkpoints/hidden_v2_best.pt")
                    if Path(c).exists()), "checkpoints/hidden_v2_best.pt")
 DATA = store.DATA_DIR
 MAX_SIDE = 1600                       # uploads are downscaled to this
@@ -40,7 +42,7 @@ MAX_SIDE = 1600                       # uploads are downscaled to this
 # 30% of that on flat areas (src/hidden_v2.texture_mask). Robustness with these
 # values is measured by tests/test_defence_benchmark.py <folder> 35 0.7 0.3.
 # A v3 checkpoint has the masking built in and is used as trained.
-STRENGTH, MASK_FLOOR = (1.0, None) if "v3" in CHECKPOINT else (0.7, 0.3)
+STRENGTH, MASK_FLOOR = (1.0, None) if ("v3" in CHECKPOINT or "v4" in CHECKPOINT) else (0.7, 0.3)
 
 # Optional second watermark layer (keyed DCT spread spectrum in luminance,
 # src/dct_layer.py): survives someone re-protecting the image with v2, where the

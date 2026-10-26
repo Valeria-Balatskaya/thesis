@@ -1,4 +1,4 @@
-# Training v3 in Google Colab — step by step
+# Training v3 / v4 in Google Colab — step by step
 
 Everything needed is already in the repository; nothing has to be uploaded by hand.
 
@@ -68,3 +68,29 @@ python tests/test_defence_benchmark.py data/products_png 35 1.0
 
 Not used: `--headroom 2`. With `--zero-white` nothing is embedded on pure white, so the
 255 → 253 shift would only change the background without helping (tests/test_texture_masks.py).
+
+## v4 — the secret-key model (after v3)
+
+v4 makes the watermark depend on a secret key: it is written and read with the key, so someone
+using the same model file without the key writes into a different channel and cannot erase
+ours. It starts from your v3 model (already in Drive) and only has to learn the key part.
+
+1. Check that `MyDrive/thesis_checkpoints_v3/hidden_v2_best.pt` exists in Google Drive
+   (it is the v3 run's best checkpoint; the notebook stops with a message if it is missing).
+2. Open the notebook as above. Cell 3 already says `RUN = 'v4'`.
+3. **Runtime → Run all.** 20,000 steps, about **3.5 h on a T4**; resumes after a disconnect.
+4. In every validation table, watch two extra lines:
+   - `wrong_key ... decodable` must fall to **0%**: a wrong key gives no ID at all.
+   - `other_key_overwrite ... decodable` should **rise**: after someone overwrites with another
+     key, our key still reads our ID.
+5. The last cell downloads `hidden_v4_best.pt`. Put it in `checkpoints/`; the app then uses it
+   automatically (it prefers v4 over v3). Evaluate with:
+
+```bash
+python tests/test_v4_keys.py checkpoints/hidden_v4_best.pt
+python tests/test_v3_vs_v2.py 30 v4=checkpoints/hidden_v4_best.pt
+```
+
+The key is derived from the server secret (`WATERMARK_MODEL_KEY`, else `WATERMARK_KEY`). Change
+it once before real use and keep it secret: anyone with both the model file and the key can
+write in our channel.

@@ -16,7 +16,8 @@
 #                strength and 1.5x): whose ID does the blind decoder return, and does the
 #                calibrated informed check (z >= 4) still find ours?
 #
-# Run: python tests/test_v3_vs_v2.py [n_per_set]   (default 30)
+# Run: python tests/test_v3_vs_v2.py [n_per_set] [name=checkpoint ...]   (default 30)
+#      e.g. python tests/test_v3_vs_v2.py 30 v4=checkpoints/hidden_v4_best.pt
 
 import sys, os, csv, time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -36,6 +37,10 @@ SYSTEMS = {
     "v2": ("checkpoints/hidden_v2_best.pt", {"strength": 0.7, "mask_floor": 0.3}),
     "v3": ("checkpoints/hidden_v3_best.pt", {"strength": 1.0, "mask_floor": None}),
 }
+# extra systems from the command line, e.g.  v4=checkpoints/hidden_v4_best.pt
+for arg in sys.argv[2:]:
+    name, ckpt = arg.split("=", 1)
+    SYSTEMS[name] = (ckpt, {"strength": 1.0, "mask_floor": None})
 SETS = [("own", "data/products_png"), ("abo", "data/abo_sample"), ("coco", "data/coco_sample")]
 ATTACKS = [
     ("clean",              None,                              {}),
@@ -156,13 +161,14 @@ for tag, _ in SETS:
         line += (f"  {s}: {100 * np.mean([r['blind'] for r in sub]):5.1f}% / "
                  f"{100 * np.mean([r['full'] for r in sub]):5.1f}%")
     print(line)
-print(f"\n{'attack (all sets, full pipeline)':<34}{'v2':>8}{'v3':>8}   blind v2 / v3")
+print(f"\n{'attack (all sets): full pipeline (blind)':<42}" + "".join(f"{s:>14}" for s in SYSTEMS))
 for atk, _, _ in ATTACKS:
-    a = [r for r in robust if r["system"] == "v2" and r["attack"] == atk]
-    b = [r for r in robust if r["system"] == "v3" and r["attack"] == atk]
-    print(f"  {atk:<32}{sum(r['full'] for r in a):>5}/{len(a)}{sum(r['full'] for r in b):>5}/{len(b)}"
-          f"   {sum(r['blind'] for r in a)}/{sum(r['blind'] for r in b)}")
-print(f"\nFALSE POSITIVES on {len(images)} clean originals: v2 {fps['v2']}, v3 {fps['v3']}")
+    line = f"  {atk:<40}"
+    for s in SYSTEMS:
+        sub = [r for r in robust if r["system"] == s and r["attack"] == atk]
+        line += f"{sum(r['full'] for r in sub):>7}/{len(sub)} ({sum(r['blind'] for r in sub)})"
+    print(line)
+print(f"\nFALSE POSITIVES on {len(images)} clean originals: " + ", ".join(f"{s} {fps[s]}" for s in SYSTEMS))
 
 print("\nOVERWRITE with the same model (own + ABO): blind ours/theirs/nothing, informed z>=4")
 for s in SYSTEMS:
