@@ -366,3 +366,65 @@ Chart: `output/parameter_study_tradeoff.png` (read rate against ΔE and against 
 - **PSNR hides where the change is:** flat 0.0 at 1.0 and no mask at 0.7 differ by only 0.4 dB PSNR (44.1 vs 43.7),
   yet the background change differs six-fold (ΔE 0.26 vs 1.68). Visibility must be judged with ΔE on flat
   areas, as in meeting 1.
+
+---
+
+# v3 results (trained in Colab, evaluated 2026-10-26)
+
+`checkpoints/hidden_v3_best.pt`: step 28,000 of 40,000. Trained on COCO + 2,500 Amazon product photos (50/50),
+NVF texture mask (floor 0.1, nothing on pure white, energy moved into texture), colour charge 8, levels
+distortion, overwrite augmentation. Used as trained (strength 1.0). v2 is used at the app setting (0.7, flat mask 0.3).
+`tests/test_v3_vs_v2.py`: 30 own, 30 ABO (evaluation split, never trained on) and 30 COCO test2017 photos, 23
+attacks (12 classic + 11 modern).
+
+**Visibility (request 2: the watermark only where there is texture)**
+
+| Set | v2 PSNR / ΔE / ΔE background | v3 PSNR / ΔE / ΔE background |
+|---|---|---|
+| Own photos | 47.3 / 1.24 / 0.86 | 41.9 / 1.27 / 0.79 |
+| ABO (pure-white backgrounds) | 46.3 / 1.17 / 0.62 | 41.7 / 1.10 / **0.19** |
+| COCO | 44.4 / 1.63 / 0.85 | 42.3 / 1.35 / 0.60 |
+
+- On marketplace photos the background change is **3× smaller**: the white background is untouched and the
+  signal sits on the product (`output/v2_vs_v3_signal.png`).
+- **PSNR is lower** (about 42 dB) because the same energy is concentrated in textured areas. The perceptual colour
+  difference over the whole image is the same or lower. PSNR alone would wrongly call v3 worse.
+- On own photos the gain is small (0.86 → 0.79). The light-grey wall is not pure white, and its camera noise counts as
+  texture for the NVF mask, so v3 still writes there, mostly as brightness speckle.
+
+**Robustness (full Retrieve–Align–Verify pipeline, 23 attacks)**
+
+| Set | v2 blind / full | v3 blind / full |
+|---|---|---|
+| Own | 72.9% / 95.9% | 72.8% / **99.7%** |
+| ABO | 59.0% / 89.4% | 64.1% / **97.7%** |
+| COCO | 71.4% / 97.2% | 66.1% / **99.3%** |
+
+(The blind rates include 6 geometric attacks that blind reading cannot handle by design: 0% for both.)
+
+- **Biggest gains** (all 90 photos, full pipeline): 50% off-centre crop 29 → 80, brightness +20% 84 → 90,
+  JPEG q30 84 → 90, Instagram filter 84 → 89, CDN WebP 85 → 90, native screenshot 85 → 90.
+- **Weaker blind reads:** native screenshot 75 → 39/90, phone photo of a screen 61 → 34/90, print 83 → 77/90.
+  Alignment recovers them (90/90 full pipeline). v3's training validation showed the same: perspective,
+  screenshot and print were barely decodable without alignment.
+- **Mirror:** 86 → 83/90 (full pipeline).
+- **False positives:** 0/90 clean originals for both, and 0/2,064 for v3 in `test_hidden_v2_eval.py`
+  (own photos: 98% blind across 12 attacks; native screenshot 37/47 blind).
+- **Flat synthetic images** (meeting 1 generalisation gap): 13% (v2) → **82%** (v3).
+
+**Overwriting with the same model** (thief re-protects our published copy; 60 own + ABO photos, clean and JPEG):
+
+| Thief | v2: blind ours / thief's ID | v2: ownership (z ≥ 4) | v3: blind ours / thief's ID | v3: ownership (z ≥ 4) |
+|---|---|---|---|---|
+| same strength | 0 / 30–44 of 60 | 48–50/60 | 9 / 7–9 of 60 | **60/60** (median z 5.8) |
+| 1.5× strength | 0 / 60 | 1/60 | 3 / 48–49 of 60 | **51/60** (median z 4.6) |
+
+The overwrite training worked. A same-strength re-protection now usually produces *no valid ID* instead of the
+thief's ID, and our signal stays provable in every case. At 1.5× the thief's ID usually wins the blind read, but
+ownership is still proven in 51/60 (v2: 1/60). With the DCT layer (meeting 2, B1) on top, coverage would be
+higher still.
+
+**Verdict:** v3 meets the supervisor's request (signal on the product, not the background) and is more robust
+on real marketplace photos. Its weakness is blind reading of screen captures, which the alignment step covers.
+The app uses v3 automatically when `checkpoints/hidden_v3_best.pt` exists. Copies protected earlier with v2 can
+only be read with v2.

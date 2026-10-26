@@ -204,6 +204,20 @@ Supervisor Q2. Baseline 39/40 read blind (one busy ABO photo fails, pipeline rec
 - Runs in parallel thrash the CPU (two torch processes -> 10-50x slower). Run benchmarks one at
   a time.
 
+## v3 results (2026-10-26, tests/test_v3_vs_v2.py, 30 own + 30 ABO + 30 COCO, 23 attacks)
+`checkpoints/hidden_v3_best.pt` (step 28,000; NVF 0.1 + zero_white + renorm, chroma 8, levels,
+overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
+- dE on background: ABO 0.62 -> 0.19, COCO 0.85 -> 0.60, own 0.86 -> 0.79 (grey wall noise counts
+  as texture). PSNR ~42 dB (energy concentrated in texture), whole-image dE equal or lower.
+- Full pipeline: ABO 89.4 -> 97.7%, own 95.9 -> 99.7%, COCO 97.2 -> 99.3%; 50% off-centre crop
+  29 -> 80/90. Blind screen captures weaker (native screenshot 75 -> 39/90, screen photo
+  61 -> 34/90), recovered by alignment. 0 false positives (0/90; 0/2,064 in test_hidden_v2_eval,
+  own photos 98% blind). Synthetic flat images 13% -> 82%.
+- Overwrite with the same model: ownership (informed z >= 4) 60/60 same strength (v2 50/60),
+  51/60 at 1.5x (v2 1/60); thief's ID read only 7-9/60 at same strength (v2 30-44/60).
+- The app picks v3 automatically; v2-protected copies (Desktop copy's app/data has 4) are not
+  readable by v3. ~/thesis/.venv lacks packages: run with the Desktop copy's venv or reinstall.
+
 ## Working rules learned the hard way
 - The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
   seed it. Test with `TRACEMARK_DATA=<other folder> uvicorn app.main:app --port 8765`.
@@ -225,9 +239,10 @@ Supervisor Q2. Baseline 39/40 read blind (one busy ABO photo fails, pipeline rec
    (docs/supervisor_questions.md). v3 training should now include ABO product photos
 10. ✅ Meeting 2 prep: v3 data/options/notebook, texture masks, DCT layer, calibrated informed
    check, registration log, copy-attack check, overhead + parameter study
-11. **Next:** user runs v3 in Colab (docs/colab_v3.md); then re-run test_hidden_v2_eval,
-   test_texture_masks, test_ecommerce_vs_regular, test_defence_benchmark, test_overwrite_defences
-   on hidden_v3_best.pt. Later: key-conditioned model, C2PA soft binding, global retrieval index
+11. ✅ v3 trained and evaluated (tests/test_v3_vs_v2.py); app uses it
+12. **Next:** real-world capture dataset (own screenshots / phone photos / messenger), comparison
+   with pretrained watermarks, thesis writing. Later: key-conditioned model, C2PA soft
+   binding, global retrieval index
 
 ## HiDDeN v2 training notes
 - HiDDeN's plain design (spatially constant message map + pooled decoder) stalled at
@@ -266,4 +281,4 @@ Supervisor Q2. Baseline 39/40 read blind (one busy ABO photo fails, pipeline rec
 - Keep legacy code paths so earlier results stay reproducible.
 - Don't commit large generated files (`results/`, `output/` are git-ignored).
 - Work happens on feature branches merged to main (PR #1, #2 merged; current:
-  `feature/v3-prep-and-overwrite-defences`).
+  `feature/v3-results`; PR #3 merged).

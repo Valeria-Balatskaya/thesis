@@ -4,8 +4,7 @@ Everything needed is already in the repository; nothing has to be uploaded by ha
 
 ## Before you start (5 minutes)
 
-1. Make sure the branch is pushed (it is: `feature/v3-prep-and-overwrite-defences`). After the
-   PR is merged, change `BRANCH = 'main'` in cell 3 of the notebook.
+1. The notebook uses the `main` branch (cell 3, `BRANCH = 'main'`).
 2. Have about **300 MB free in Google Drive** (training images ~200 MB, checkpoints ~5 MB each).
 3. On the Mac, keep the computer awake while it trains: in Terminal run `caffeinate -d`
    (stop it later with Ctrl+C). Plug in the charger and don't close the lid.
@@ -13,7 +12,7 @@ Everything needed is already in the repository; nothing has to be uploaded by ha
 ## Run it
 
 1. Open <https://colab.research.google.com> → **File → Open notebook → GitHub** → paste
-   `Valeria-Balatskaya/thesis`, choose branch `feature/v3-prep-and-overwrite-defences`,
+   `Valeria-Balatskaya/thesis`, choose branch `main`,
    open `notebooks/train_hidden_v2.ipynb`.
 2. **Runtime → Change runtime type → T4 GPU → Save.**
 3. **Runtime → Run all.** When asked, allow access to Google Drive.
