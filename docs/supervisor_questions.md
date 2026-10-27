@@ -428,3 +428,57 @@ higher still.
 on real marketplace photos. Its weakness is blind reading of screen captures, which the alignment step covers.
 The app uses v3 automatically when `checkpoints/hidden_v3_best.pt` exists. Copies protected earlier with v2 can
 only be read with v2.
+
+---
+
+# Making the watermark immune to a second watermark (beyond the upload check)
+
+Supervisor's question: can our watermark survive a second watermark on top, even one made with our own model,
+without relying on the upload pre-check?
+
+**No invisible watermark can be fully immune.** Anyone with the same model can paint a stronger mark on top if they
+accept damaging the picture. The achievable goal is that an overwrite either **fails** (a different channel), or
+**visibly damages the image**, while ownership stays **provable** (informed check, second layer, signed log).
+
+## 1. How much damage does an overwrite need? (`tests/test_overwrite_cost.py`)
+
+A thief re-protects our published copy with the same model and a random ID, at 1–4× the system's strength.
+40 photos (20 own + 20 ABO). "Owned" = calibrated informed check z ≥ 4, or the keyed DCT layer detected.
+For reference, our own published copy has ΔE 1.12 (v3). Rule of thumb: ΔE > 2 is visible at a glance.
+
+| Thief strength | Thief's damage ΔE (v3) | v2: owned | v3: owned | v3 + DCT layer: owned |
+|---|---|---|---|---|
+| 1× | 1.69 | 34/40 | **40/40** | **40/40** |
+| 1.5× | 2.10 | 1/40 | 34/40 | **37/40** |
+| 2× | 2.53 | 0/40 | 13/40 | **26/40** |
+| 3× | 3.39 | 0/40 | 3/40 | 6/40 |
+| 4× | 4.21 | 0/40 | 2/40 | 5/40 |
+
+Chart: `output/overwrite_cost.png`.
+
+- **With v2**, a thief removes all ownership evidence at ΔE ≈ 2.1, which is barely visible.
+- **With v3**, the evidence holds until the thief's version is clearly visible (ΔE > 2). With the DCT layer it is
+  still provable in two thirds of the photos at ΔE ≈ 2.5. Erasing it almost completely needs ΔE ≈ 3.4, which is visible damage.
+- **Limit:** the DCT layer helps less against a v3 thief (26/40 at 2×) than against a v2 thief (34–37/40 at full
+  strength, meeting 2). v3 writes partly in brightness, the same channel as the DCT layer.
+
+## 2. The proper fix: a secret-key model (v4)
+
+Today anyone with our model file writes in the **same channel** as we do, which is why an overwrite with our own
+model replaces our ID. v4 makes the network **key-conditioned**:
+
+- the secret key (64 bits, derived from the server secret with HMAC) is an extra input to the encoder and modulates its
+  per-bit carrier pattern;
+- the decoder is conditioned on the key with FiLM layers (Perez et al. 2018), so it reads only marks written with the
+  same key;
+- training: random keys per image, plus two extra objectives:
+  1. With a **wrong key** the decoder must output nothing (no valid ID, so no false positives).
+  2. **Someone overwrites with another key** (30% of steps): our key must still read our ID.
+- warm start from v3: the new key layers start at zero, so training begins exactly at v3 and only learns the key part
+  (20,000 steps, about 3.5 h on a T4).
+
+Expected effect: a copy of our model without our key (a leaked or open-sourced model, a competitor's deployment)
+writes into a different channel and cannot erase our ID. An insider with our key is still stopped by the upload pre-check and the signed
+registration log. Code, tests and notebook are ready (`RUN = 'v4'`, docs/colab_v3.md). Results follow after the Colab
+run: `tests/test_v4_keys.py` (wrong keys, other-key and same-key overwrite) and
+`tests/test_v3_vs_v2.py 30 v4=checkpoints/hidden_v4_best.pt` (quality and robustness against v3).
