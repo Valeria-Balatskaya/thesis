@@ -218,6 +218,18 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
 - The app picks v3 automatically; v2-protected copies (Desktop copy's app/data has 4) are not
   readable by v3. ~/thesis/.venv lacks packages: run with the Desktop copy's venv or reinstall.
 
+## Overwrite cost + v4 (2026-10-27)
+- `tests/test_overwrite_cost.py` (20 own + 20 ABO, thief = same model at 1-4x): ownership
+  (informed z>=4 or DCT) v2 34/40 at 1x, 1/40 at 1.5x (thief dE 2.06); v3 40/34/13/3/2 of 40
+  at 1/1.5/2/3/4x (dE 1.69/2.10/2.53/3.39/4.21); v3+DCT 40/37/26/6/5. DCT layer helps less
+  against a v3 thief (v3 writes partly in luminance).
+- v4 = key-conditioned model (`key_dim` 64): key modulates the encoder carrier + key channels;
+  decoder FiLM on deep and fine features; zero-init, warm start from v3 (`--init-from`).
+  Training: random keys, wrong-key loss (logits -> 0), other-key overwrite (prob 0.3).
+  Deployment key = HMAC(WATERMARK_MODEL_KEY or WATERMARK_KEY, "model-key"). Notebook RUN='v4'
+  (20,000 steps); evaluate with tests/test_v4_keys.py and test_v3_vs_v2.py 30 v4=... .
+  App prefers checkpoints/hidden_v4_best.pt. Not trained yet (waiting for the Colab run).
+
 ## Working rules learned the hard way
 - The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
   seed it. Test with `TRACEMARK_DATA=<other folder> uvicorn app.main:app --port 8765`.
@@ -240,7 +252,8 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
 10. ✅ Meeting 2 prep: v3 data/options/notebook, texture masks, DCT layer, calibrated informed
    check, registration log, copy-attack check, overhead + parameter study
 11. ✅ v3 trained and evaluated (tests/test_v3_vs_v2.py); app uses it
-12. **Next:** real-world capture dataset (own screenshots / phone photos / messenger), comparison
+12. v4 secret-key model: code ready, user trains in Colab (RUN='v4'), then test_v4_keys
+13. **Next:** real-world capture dataset (own screenshots / phone photos / messenger), comparison
    with pretrained watermarks, thesis writing. Later: key-conditioned model, C2PA soft
    binding, global retrieval index
 

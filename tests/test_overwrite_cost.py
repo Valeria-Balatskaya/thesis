@@ -125,7 +125,7 @@ for sysname in SYSTEMS:
         ax.annotate(f"{p['level']}x", (p["thief_dE"], 100 * p["owned"] / p["n"]),
                     textcoords="offset points", xytext=(4, 4), fontsize=8, color="#52514e")
 ax.axvline(2.0, color="#52514e", linestyle=":", linewidth=1)
-ax.text(2.03, 3, "visible at a glance (dE > 2)", fontsize=8, color="#52514e")
+ax.text(2.03, 50, "visible at a glance (dE > 2)", fontsize=8, color="#52514e")
 ax.set_xlabel("damage of the thief's version vs the original (CIEDE2000 dE)")
 ax.set_ylabel("% of photos")
 ax.set_title("Overwriting our watermark costs visible damage", loc="left", fontweight="bold", fontsize=11)
