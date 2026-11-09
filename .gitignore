@@ -137,3 +137,7 @@ data/coco_sample/
 
 # TraceMark app runtime data
 app/data/
+
+# Optional third-party baselines (scripts/get_baselines.sh) and the real-world captures
+third_party/
+data/real_world/
