@@ -26,6 +26,12 @@
 #                      copy attack (watermark transplanted onto another image)
 #   watermark_aligned  read succeeded after alignment -> proves the suspect
 #                      derives from the published, watermarked copy
+#   watermark_overwritten  (after mark_overwritten) same picture, our ID not
+#                      readable, but the calibrated informed check (or the DCT
+#                      layer) finds one of our copies' exact signal underneath:
+#                      someone wrote another watermark over ours, or the image
+#                      was degraded below what the decoder can read. Ownership
+#                      dispute evidence, not a blind read
 #   fingerprint_only   same picture as a registered original, watermark not
 #                      readable (e.g. AI regeneration). Proves visual identity,
 #                      NOT which copy leaked
@@ -227,7 +233,8 @@ class DefencePipeline:
                        "bit_errors": blind["errors_corrected"] if known else None,
                        "aspect": blind.get("aspect"),
                        "note": None if known or blind["product_id"] is None
-                       else "decoded an ID that is not registered"})
+                       else "decoded an ID that is not registered",
+                       "foreign_id": None if known else blind["product_id"]})
         out["bits"] = blind["bits"]
         if known:
             out.update(verdict="watermark", copy_id=blind["product_id"],
@@ -405,7 +412,8 @@ def _codeword_any(copy_id: int) -> np.ndarray:
 
 def ownership_check(model: HiddenV2Model, suspect_rgb: np.ndarray, original_rgb: np.ndarray,
                     copy_id: int, dct_reference_rgb: np.ndarray | None = None,
-                    checker: "InformedChecker | None" = None) -> dict:
+                    checker: "InformedChecker | None" = None,
+                    embed_kwargs: dict | None = None) -> dict:
     """
     Ownership evidence when the blind decoder cannot read our ID (e.g. someone
     re-protected the image with their own watermark). Two independent informed
@@ -427,10 +435,43 @@ def ownership_check(model: HiddenV2Model, suspect_rgb: np.ndarray, original_rgb:
         if m is None:
             return {"aligned": False, "informed": None, "dct": None, "owned": False}
         suspect = align(suspect, m["H"], original_rgb)[0]
-    checker = checker or InformedChecker(model, original_rgb, copy_id)
+    # embed_kwargs must match how the copy was protected (v2 app: 0.7 / flat 0.3,
+    # v3/v4: strength 1.0, mask as trained), else the reference residual differs
+    checker = checker or InformedChecker(model, original_rgb, copy_id, embed_kwargs=embed_kwargs)
     informed = checker.test(suspect)
     dct = None
     if dct_reference_rgb is not None:
         dct = dct_layer.detect(suspect, dct_reference_rgb, copy_id)
     owned = informed["z"] >= Z_THRESHOLD or bool(dct and dct["detected"])
     return {"aligned": True, "informed": informed, "dct": dct, "owned": owned}
+
+
+def mark_overwritten(result: dict, evidence: list[dict]) -> dict:
+    """
+    Upgrade a fingerprint_only result to watermark_overwritten when the ownership
+    check found one of our copies underneath. `evidence` is one entry per issued copy
+    of the matched product: {"copy_id", "owned", "informed_z", "dct_sim", ...}
+    (app/guard.ownership or the same built from ownership_check).
+
+    Testing every copy of the product is k tests, so the per-image false-positive
+    rate is up to k times the single-test rate (measured in
+    tests/test_overwritten_verdict.py). The copy with the strongest evidence is named.
+    their_id = the ID the blind decoder returned instead of ours, if it decoded a
+    valid (unregistered) one; None means no valid ID at all (another key, another
+    system, or a degraded image).
+    """
+    if result["verdict"] != "fingerprint_only":
+        return result
+    hits = [e for e in evidence if e.get("owned")]
+    if not hits:
+        return result
+    best = max(hits, key=lambda e: (e.get("informed_z") or float("-inf"),
+                                    e.get("dct_sim") or float("-inf")))
+    blind = next((st for st in result["stages"] if st["stage"] == "blind"), {})
+    result["verdict"] = "watermark_overwritten"
+    result["copy_id"] = best["copy_id"]
+    result["overwrite"] = {"copy_id": best["copy_id"], "informed_z": best.get("informed_z"),
+                           "p_empirical": best.get("p_empirical"), "dct_sim": best.get("dct_sim"),
+                           "z_threshold": Z_THRESHOLD, "copies_tested": len(evidence),
+                           "their_id": blind.get("foreign_id")}
+    return result
