@@ -28,12 +28,34 @@ try:                                  # iPhone photos
 except ImportError:
     pass
 
-# hidden_v3_best.pt (trained with a colour charge and flat-area masking, see
-# notebooks/train_hidden_v2.ipynb) is preferred when present.
-# hidden_v4_best.pt (secret-key model) is preferred over v3, v3 over v2.
-CHECKPOINT = next((c for c in ("checkpoints/hidden_v4_best.pt", "checkpoints/hidden_v3_best.pt",
-                               "checkpoints/hidden_v2_best.pt")
-                   if Path(c).exists()), "checkpoints/hidden_v2_best.pt")
+# Model choice: hidden_v4_best.pt (secret-key model) over v3 over v2, taking the
+# first file that exists AND loads as a HiDDeN v2-family checkpoint, so a missing
+# or broken v4 file falls back to v3. TRACEMARK_CHECKPOINT pins one file (e.g. to
+# keep reading copies protected with an older model: copies made with one model
+# cannot be read by another).
+CHECKPOINT_CANDIDATES = ("checkpoints/hidden_v4_best.pt", "checkpoints/hidden_v3_best.pt",
+                         "checkpoints/hidden_v2_best.pt")
+
+
+def pick_checkpoint(candidates=CHECKPOINT_CANDIDATES) -> str:
+    pinned = os.environ.get("TRACEMARK_CHECKPOINT")
+    if pinned:
+        return pinned
+    import torch
+    for c in candidates:
+        if not Path(c).exists():
+            continue
+        try:
+            ckpt = torch.load(c, map_location="cpu", weights_only=False)
+            if ckpt.get("arch") == "hidden_v2" and "model" in ckpt:
+                return c
+            print(f"[guard] {c} is not a HiDDeN v2-family checkpoint, skipped")
+        except Exception as e:                       # truncated download etc.
+            print(f"[guard] {c} could not be loaded ({e.__class__.__name__}), skipped")
+    return candidates[-1]
+
+
+CHECKPOINT = pick_checkpoint()
 DATA = store.DATA_DIR
 MAX_SIDE = 1600                       # uploads are downscaled to this
 # Watermark visibility settings. At full strength (1.0 = 40 dB, as trained) the

@@ -31,6 +31,7 @@ from src.hidden_v2_inference import HiddenV2Model
 from src.defence import DefencePipeline, InformedChecker, Z_THRESHOLD
 from src.metrics import compute, visibility
 from src import attacks, ecommerce_attacks as ea, modern_attacks as ma
+from src.stats import pct_ci, frac_ci
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 30
 SYSTEMS = {
@@ -41,6 +42,8 @@ SYSTEMS = {
 for arg in sys.argv[2:]:
     name, ckpt = arg.split("=", 1)
     SYSTEMS[name] = (ckpt, {"strength": 1.0, "mask_floor": None})
+if os.environ.get("ONLY"):                      # e.g. ONLY=v3,v4 to skip v2
+    SYSTEMS = {k: v for k, v in SYSTEMS.items() if k in os.environ["ONLY"].split(",")}
 SETS = [("own", "data/products_png"), ("abo", "data/abo_sample"), ("coco", "data/coco_sample")]
 ATTACKS = [
     ("clean",              None,                              {}),
@@ -120,10 +123,15 @@ for sysname, (ckpt, kw) in SYSTEMS.items():
         if tag == "coco":
             continue
         checker = InformedChecker(model, rgb(orig), 1000 + i, embed_kwargs=kw)
-        for name, st in (("same_strength", native), ("x1.5", native * 1.5)):
+        # keyed models (v4): also a thief with the model file but another key
+        thieves = [("same_strength", native, None), ("x1.5", native * 1.5, None)]
+        if model.key_dim:
+            okey = model.other_key(10_000 + i)
+            thieves += [("other_key", native, okey), ("other_key_x1.5", native * 1.5, okey)]
+        for name, st, tkey in thieves:
             thief = f"{OUT}/thief.png"
             model.embed_product(pub[i], 500_000 + i, thief, strength=st,
-                                mask_floor=kw["mask_floor"])
+                                mask_floor=kw["mask_floor"], key=tkey)
             for post in ("clean", "jpeg_q70"):
                 sus = f"{OUT}/ow.png"
                 copyfile(thief, sus) if post == "clean" else attacks.jpeg_compress(thief, sus, 70)
@@ -143,7 +151,7 @@ for name, rows in [("quality", quality), ("robustness", robust), ("overwrite", o
         w.writeheader()
         w.writerows(rows)
 
-print(f"\n{N} photos per set; v2 at 0.7/flat 0.3, v3 as trained\n")
+print(f"\n{N} photos per set; v2 at 0.7/flat 0.3, v3 (and v4) as trained\n")
 print("VISIBILITY (mean)            PSNR    SSIM    dE   dE flat")
 for tag, _ in SETS:
     for s in SYSTEMS:
@@ -158,8 +166,8 @@ for tag, _ in SETS:
     line = f"  {tag:<5}"
     for s in SYSTEMS:
         sub = [r for r in robust if r["system"] == s and r["set"] == tag]
-        line += (f"  {s}: {100 * np.mean([r['blind'] for r in sub]):5.1f}% / "
-                 f"{100 * np.mean([r['full'] for r in sub]):5.1f}%")
+        line += (f"  {s}: blind {pct_ci(sum(r['blind'] for r in sub), len(sub))}, "
+                 f"full {pct_ci(sum(r['full'] for r in sub), len(sub))}")
     print(line)
 print(f"\n{'attack (all sets): full pipeline (blind)':<42}" + "".join(f"{s:>14}" for s in SYSTEMS))
 for atk, _, _ in ATTACKS:
@@ -168,15 +176,18 @@ for atk, _, _ in ATTACKS:
         sub = [r for r in robust if r["system"] == s and r["attack"] == atk]
         line += f"{sum(r['full'] for r in sub):>7}/{len(sub)} ({sum(r['blind'] for r in sub)})"
     print(line)
-print(f"\nFALSE POSITIVES on {len(images)} clean originals: " + ", ".join(f"{s} {fps[s]}" for s in SYSTEMS))
+print(f"\nFALSE POSITIVES on {len(images)} clean originals: "
+      + ", ".join(f"{s} {frac_ci(fps[s], len(images))}" for s in SYSTEMS))
 
 print("\nOVERWRITE with the same model (own + ABO): blind ours/theirs/nothing, informed z>=4")
 for s in SYSTEMS:
-    for name in ("same_strength", "x1.5"):
+    for name in ("same_strength", "x1.5", "other_key", "other_key_x1.5"):
         for post in ("clean", "jpeg_q70"):
             sub = [r for r in overwrite if r["system"] == s and r["thief"] == name and r["post"] == post]
+            if not sub:
+                continue
             c = lambda v: sum(r["blind"] == v for r in sub)
             print(f"  {s} {name:<14} {post:<9} {c('ours'):>3}/{c('theirs')}/{c('nothing')} of {len(sub)}   "
-                  f"informed {sum(r['informed_hit'] for r in sub)}/{len(sub)} "
+                  f"informed {frac_ci(sum(r['informed_hit'] for r in sub), len(sub))} "
                   f"(median z {np.median([r['informed_z'] for r in sub]):.2f})")
 print(f"\nCSVs: output/v3_vs_v2_*.csv ({time.time() - t0:.0f}s)")
