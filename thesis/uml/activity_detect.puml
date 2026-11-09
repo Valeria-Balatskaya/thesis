@@ -1,0 +1,32 @@
+@startuml activity_detect
+' Analysing a suspect image (thesis ch. 4.4)
+start
+:Suspect image (upload or crawled);
+:1 BLIND read (+ aspect-ratio retries);
+if (Valid registered copy ID?) then (yes)
+  if (content check: shows the registered picture?) then (yes)
+    :verdict **watermark**;
+  else (no)
+    :verdict **watermark_unbound**\n(possible copy attack);
+  endif
+  stop
+endif
+:2 RETRIEVE: SIFT + RANSAC against registered originals\n(also mirrored);
+if (Match with consistent structure?) then (no)
+  :verdict **none**;
+  stop
+endif
+:3 ALIGN: warp into original's frame,\nfill uncovered pixels from clean original;
+:4 VERIFY: read again; BCH or match the product's codewords\n(<= limit errors at FPR 1e-6);
+if (Copy verified?) then (yes)
+  :verdict **watermark_aligned**;
+  stop
+endif
+:Ownership check for every issued copy:\ninformed z vs 500 never-issued copies (z >= 4),\nDCT layer if present;
+if (Our copy found?) then (yes)
+  :verdict **watermark_overwritten**\n(evidence: z, copy, thief's ID, log record);
+else (no)
+  :verdict **fingerprint_only**;
+endif
+stop
+@enduml

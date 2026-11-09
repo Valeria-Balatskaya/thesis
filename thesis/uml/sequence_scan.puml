@@ -1,0 +1,37 @@
+@startuml sequence_scan
+' Scan request (thesis ch. 4.4)
+actor Investigator
+participant "UI" as UI
+participant "main.py\n/api/scan" as API
+participant "guard.analyse" as G
+participant "DefencePipeline" as P
+participant "HiddenV2Model" as M
+participant "InformedChecker" as I
+participant "registry_log" as L
+database "SQLite" as DB
+Investigator -> UI : upload suspect
+UI -> API : POST /api/scan (image, record)
+API -> G : analyse(path)
+G -> P : analyse(path)
+P -> M : read_product (blind)
+alt valid registered ID
+  P --> G : watermark
+else
+  P -> P : fingerprint + match (SIFT/RANSAC)
+  P -> P : align to original
+  P -> M : decode aligned
+  P --> G : watermark_aligned / fingerprint_only / none
+end
+opt fingerprint_only
+  loop each issued copy of the product
+    G -> I : build null (500 decoys), test(aligned)
+    I --> G : z, p
+  end
+  G -> G : mark_overwritten (z >= 4)
+  G -> L : verify_copy(copy)
+end
+G -> DB : record_detection(verdict, evidence)
+G --> API : result
+API --> UI : JSON
+UI --> Investigator : verdict, stages, evidence, report link
+@enduml

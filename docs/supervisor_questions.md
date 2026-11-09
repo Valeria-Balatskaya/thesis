@@ -482,3 +482,93 @@ writes into a different channel and cannot erase our ID. An insider with our key
 registration log. Code, tests and notebook are ready (`RUN = 'v4'`, docs/colab_v3.md). Results follow after the Colab
 run: `tests/test_v4_keys.py` (wrong keys, other-key and same-key overwrite) and
 `tests/test_v3_vs_v2.py 30 v4=checkpoints/hidden_v4_best.pt` (quality and robustness against v3).
+
+---
+
+# Meeting 3 — final phase (in progress, started 2026-11-09)
+
+Every percentage now has n and a 95% Wilson interval (`src/stats.py`). Objectives in brackets.
+
+## Part 1 — v4 secret-key model (1.2.3, 1.2.5)
+
+Waiting for the Colab run. Everything to evaluate it is ready and smoke-tested with a stand-in
+checkpoint (v3 weights + untrained key layers):
+- `tests/test_v4_keys.py`: wrong keys, other-key overwrite, same-key overwrite.
+- `tests/test_v3_vs_v2.py 30 v4=...`: now also a thief with *another key*.
+- `tests/test_overwrite_cost.py 20 20 v4=...`: v4 and v4+DCT, thief same key / other key, 1–4×.
+- `tests/test_rewatermark.py 20 20 <ckpt>` and `tests/test_in_the_wild.py ... <ckpt>`: take any
+  checkpoint.
+- `bash scripts/evaluate_v4.sh` runs all of them in sequence (~3–4 h).
+
+The app now uses a checkpoint only if it **loads**: a missing or broken `hidden_v4_best.pt` falls back
+to v3. `TRACEMARK_CHECKPOINT` pins one model, so copies already protected with v3 stay readable.
+
+## Part 2 — overwriting
+
+### 2.1 New verdict `watermark_overwritten` (ownership dispute)
+
+When a scan finds the registered picture but no readable ID, the app tests every issued copy of that
+product with the calibrated informed check (z against 500 never-issued copies, threshold 4), plus the
+DCT layer if present. If one of our copies is found, the verdict is `watermark_overwritten`.
+
+The scan result and the evidence report show:
+- the copy;
+- z and the empirical p;
+- the ID the blind decoder read instead (if any);
+- the signed registration record with its time.
+
+**Bug fixed on the way:** the app's ownership check rebuilt the reference with v2's settings
+(strength 0.7, flat mask 0.3), although the app embeds with v3 at 1.0 and its own mask.
+
+`tests/test_overwritten_verdict.py`: v3 as deployed, 40 photos (20 own + 20 ABO), two issued copies per
+product (A published, B never published):
+
+| Scenario | Should fire | Result (clean = JPEG q70) |
+|---|---|---|
+| thief re-protects copy A, same strength | yes | overwritten → A: 29/40 [57–84%]; ours still read directly: 11/40; **our copy identified 40/40** |
+| thief re-protects copy A, 1.5× | yes | overwritten → A: 31/40 [62–88%]; read directly: 2/40; same picture only: 7/40 |
+| clean original; original + thief's own mark; + Cox DCT; + LSB; + visible logo; rotate 8°; off-centre crop; page screenshot | no | **0/520 [0–0.73%]** overwritten; 1,034 informed tests, highest z 2.81 |
+
+- **The wrong copy (B) was never named.**
+- **A thief who watermarks a leaked *clean* original doesn't trigger the verdict** (0/80). This is
+  correct: our copy's signal isn't in that image.
+- Through the API (separate data folder, port 8765) the verdict, the evidence panel and the report
+  all worked. Copy #4097 was overwritten with v3 and an unregistered ID. Result: overwritten,
+  thief's ID 900000, z 4.9, record #1 verified. The other copy scored z 1.8.
+- **Cost:** each dispute scan builds the 500-decoy null once per issued copy, about 15 s per copy
+  on CPU. A product with 2 copies takes about 30 s per scan. It only runs when the result would
+  otherwise be "same picture".
+
+### 2.2 Overwrite-resistance table
+
+`tests/test_overwrite_cost.py` now covers:
+- v2, v3, v3+DCT, v4, v4+DCT;
+- thief with the same key or another key;
+- the thief's ID read with the thief's own key;
+- ownership with CIs;
+- a summary CSV for `scripts/thesis_tables.py`.
+
+**Runs when v4 arrives**, so all models are measured in one run.
+
+### 2.3 Spatial redundancy — design note
+
+`docs/spatial_redundancy.md`: tiles with per-tile keys. Expected trade-offs:
+- **Better:** large crops, and overwriting gets more expensive.
+- **Worse:** per-tile robustness, small thumbnails, and up to K× blind false positives.
+- **Risk:** seams at tile borders.
+
+It also describes a 1-day experiment without training.
+
+## Part 3 — real-world capture dataset (1.2.3, 1.4)
+
+Prepared:
+- `docs/real_world_protocol.md`: checklist.
+- `data/real_world/to_capture/`: 20 v3 copies + 10 controls (+ 20 v4 copies with `--add v4`),
+  viewer, listing pages, shop page, key page.
+- `scripts/sort_captures.py`: files captures by picture match, not by watermark.
+- `tests/test_real_world.py`: evaluation.
+
+Smoke test with 6 real headless-Chrome page captures:
+- 3/4 protected traced (all via alignment), 0/3 false positives.
+- **Finding:** an ABO fabric swatch (repetitive texture) gives SIFT 0 matching points, so neither
+  the sorter nor retrieval can place it. This is a retrieval limit to report.

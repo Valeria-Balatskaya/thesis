@@ -1,0 +1,24 @@
+@startuml activity_protect
+' Protecting an image (thesis ch. 4.3)
+start
+:Seller uploads original (PNG/JPEG/HEIC);
+:Normalise: EXIF rotation, RGB, longer side <= 1600 px;
+:Pre-check: run the detection pipeline on the upload;
+if (Carries one of our IDs, matches a registered\noriginal, or a valid foreign TraceMark ID?) then (yes)
+  :Refuse (HTTP 409) with the reason;
+  stop
+else (no)
+endif
+:Store original, create product;
+:Reserve copy ID (20 bits);
+:Payload = ID + HMAC tag (10 bits), XOR mask,\nBCH(63,30,t=6) -> 63 bits;
+:Encoder (v3/v4, with secret key for v4)\nresidual at 128 px, NVF mask, upsampled;
+if (DCT layer enabled?) then (yes)
+  :Keep reference; add keyed DCT spread spectrum\n(luminance, HMAC(key, copy ID));
+endif
+:Measure PSNR / SSIM, write diff image;
+:Append signed, hash-chained registration record\n(SHA-256 of original and copy, UTC time, optional RFC 3161);
+:Register original's SIFT fingerprint and copy IDs;
+:Return protected copy for publishing;
+stop
+@enduml

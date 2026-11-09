@@ -1,0 +1,38 @@
+@startuml use_case
+' TraceMark — use case diagram (thesis ch. 4.2)
+left to right direction
+skinparam packageStyle rectangle
+actor Seller
+actor "Investigator\n(seller or support)" as Inv
+actor "Image thief" as Thief
+actor "Scheduler" as Sched
+rectangle TraceMark {
+  usecase "Register seller" as UC1
+  usecase "Protect product image" as UC2
+  usecase "Pre-check upload\n(already protected?)" as UC2a
+  usecase "Issue traceable copy\nper channel" as UC3
+  usecase "Authorise listing URL" as UC4
+  usecase "Scan suspect image" as UC5
+  usecase "Retrieve-Align-Verify" as UC5a
+  usecase "Ownership check\n(informed, DCT layer)" as UC5b
+  usecase "Watch pages / crawl" as UC6
+  usecase "Open evidence report" as UC7
+  usecase "Verify registration log" as UC8
+  usecase "Attack Lab\n(simulate theft)" as UC9
+}
+Seller --> UC1
+Seller --> UC2
+Seller --> UC3
+Seller --> UC4
+Seller --> UC9
+UC2 ..> UC2a : <<include>>
+UC2 ..> UC3 : <<include>>
+Inv --> UC5
+Inv --> UC7
+Inv --> UC8
+UC5 ..> UC5a : <<include>>
+UC5b ..> UC5 : <<extend>>\n[same picture, ID unreadable]
+Sched --> UC6
+UC6 ..> UC5 : <<include>>
+Thief --> UC2 : tries to re-protect\na stolen copy
+@enduml
