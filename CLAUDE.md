@@ -252,7 +252,14 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
   scripts/reproduce_all.sh (~13-15 h) + scripts/thesis_tables.py -> output/thesis/*.md, thesis/figures/.
 - thesis/: outline.md (objective mapping INFERRED, user must confirm wording), references.bib (36,
   recent ones verified online), uml/*.puml (render: brew install plantuml; scripts/render_uml.sh).
-- Baseline smoke (3 photos, not results): TrustMark dE 0.51 but 1/3 clean false detection; WAM dE 3.2.
+- Baselines (tests/test_baselines.py 30; 90 photos x 23 attacks = 2,070 each): blind / +RAV / clean FP.
+  ours v3 67.6 / 97.5% (deployed 98.9%), dE 1.24, 0/90; TrustMark Q 72.0 / 87.0%, dE 0.41, 2/90;
+  WAM 79.9 / 91.0%, dE 2.53 (visible), 0/90; at matched dE ~1.1: TrustMark 70.8 / 85.9, WAM 46.3 / 66.6.
+  Our blind decoder is not the best; RAV is the contribution and helps every system. TrustMark wins
+  blind on screenshots/screen photos/print, WAM on off-centre crops/perspective, both on mirror.
+- Ablation (tests/test_ablation.py, v3, 60 photos x 23 = 1,380, 500 negatives): full 98.7%;
+  -alignment 68.4%; -aspect retry 98.7% full / 64.0% blind; -BCH 80.8% (FP 1/500); -HMAC tag
+  FP 6/500; -texture mask 95.7% (dE bg 0.50 -> 0.76).
 
 ## Working rules learned the hard way
 - The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
@@ -278,7 +285,7 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
 11. ✅ v3 trained and evaluated (tests/test_v3_vs_v2.py); app uses it
 12. v4 secret-key model: code ready, user trains in Colab (RUN='v4'), then test_v4_keys
 13. Final phase (Meeting 3): v4 eval, overwritten verdict ✅, real-world tooling ✅ (captures: user),
-   baselines + ablation (running), reproduce_all ✅, thesis scaffolding ✅
+   baselines + ablation ✅, reproduce_all ✅, thesis scaffolding ✅
 14. **Next:** real-world capture dataset (own screenshots / phone photos / messenger), comparison
    with pretrained watermarks, thesis writing. Later: key-conditioned model, C2PA soft
    binding, global retrieval index

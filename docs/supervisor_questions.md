@@ -572,3 +572,93 @@ Smoke test with 6 real headless-Chrome page captures:
 - 3/4 protected traced (all via alignment), 0/3 false positives.
 - **Finding:** an ABO fabric swatch (repetitive texture) gives SIFT 0 matching points, so neither
   the sorter nor retrieval can place it. This is a retrieval limit to report.
+
+## Part 4 — comparison with pretrained watermarks (1.2.4, 1.4)
+
+`tests/test_baselines.py 30`: 90 photos (30 own + 30 ABO + 30 COCO) x 23 attacks = 2,070
+attacked images per system and setting. Tables: `output/thesis/baselines.md`. Chart:
+`thesis/figures/baselines.png`.
+
+Systems:
+- TrustMark (Adobe, model Q, 61 data bits);
+- Watermark Anything (WAM, Meta, MIT weights, 32 bits; we count it as detected when the
+  predicted mask covers ≥ 50% of the image);
+- ours (v3, 30 data bits).
+
+Settings:
+- "Matched" = each system's strength tuned by bisection to our ΔE (~1.1–1.2).
+- "+RAV" = the same Retrieve–Align–Verify wrapper around every system.
+- "Deployed" = our full app pipeline.
+
+| System | Setting | PSNR | ΔE / ΔE bg | False detections, clean | Blind | +RAV |
+|---|---|---|---|---|---|---|
+| ours v3 | default | 42.0 | 1.24 / 0.53 | 0/90 | 67.6% [65.6–69.6] | 97.5% [96.8–98.1]; deployed 98.9% [98.3–99.3] |
+| TrustMark | default | 43.9 | 0.41 / 0.31 | **2/90** | 72.0% [70.1–73.9] | 87.0% [85.4–88.3] |
+| TrustMark | matched (3.1x) | 34.6 | 1.12 / 0.77 | 2/90 | 70.8% [68.8–72.7] | 85.9% [84.4–87.4] |
+| WAM | default | 40.2 | 2.53 / 1.60 | 0/90 | 79.9% [78.1–81.5] | 91.0% [89.7–92.2] |
+| WAM | matched (0.86x) | 47.2 | 1.09 / 0.68 | 0/90 | 46.3% [44.2–48.5] | 66.6% [64.6–68.6] |
+
+Write-up notes:
+- **Our blind decoder is not the best.** Blind, ours (67.6%) is below TrustMark (72.0%) and WAM
+  (79.9%).
+  - WAM's lead comes at twice our ΔE (2.53; background 1.60, i.e. visible). At our ΔE, WAM falls
+    to 46.3%.
+  - TrustMark is the least visible (ΔE 0.41).
+  - Turning TrustMark up 3x to our ΔE does not make it more robust (70.8%).
+- **The pipeline is the main contribution, and it is system-independent.** RAV adds +29.9 pp to
+  ours, +15.0 to TrustMark and +11.1 to WAM. With RAV, ours is highest at equal or lower
+  visibility.
+- **Where the baselines win:**
+  - TrustMark reads blind:
+    - native screenshot: 90/90 (ours 39/90);
+    - screen photo: 69/90 (ours 34);
+    - print-photo: 90/90 (ours 77).
+  - TrustMark and WAM read mirrored images blind (89–90/90). Ours reads 0 blind and 83/90 even
+    with RAV.
+  - WAM reads off-centre crops blind (70%: 90/90, 50%: 58/90; ours 0 blind).
+  - WAM reads perspective blind: 80/90.
+- **Where ours wins:**
+  - inpaint 89/90 (TrustMark 63);
+  - brightness 89 (TrustMark 76, WAM 82);
+  - Instagram filter 88 (70 / 79);
+  - CDN WebP 360 px 87 (72 / 33);
+  - JPEG q30 89 (WAM 45).
+  - TrustMark stays at 14/90 on the 70% off-centre crop and 0/90 on the 50% crop even after
+    alignment. Ours: 85 and 63.
+- **False positives:** TrustMark detected a watermark in 2/90 clean originals [1–8%]. Ours and WAM:
+  0/90 [0–4%]. n = 90 is small; our own false-positive evidence is 0/500 (ablation) and 0/2,064
+  (test_hidden_v2_eval).
+- **Speed:** all comparable at 1024 px. Embed 0.16 / 0.19 / 0.28 s, read 0.04 / 0.06 / 0.17 s
+  (ours / TrustMark / WAM, M1 CPU).
+- **Fairness caveats:**
+  - Payloads differ (30 vs 61 vs 32 bits).
+  - The baselines are general-purpose, while ours was trained on product photos (the evaluation
+    split is never used in training).
+  - The WAM detection rule is ours.
+  - "Matched" means matched whole-image ΔE, not matched background ΔE.
+
+## Part 5 — ablation, statistics, reproduction (1.4)
+
+`tests/test_ablation.py 30 30 500`: v3, 60 photos (30 own + 30 ABO) x 23 attacks = 1,380;
+false positives on 500 never-protected ABO photos. Table: `output/thesis/ablation.md`.
+
+| Removed | Traced | False positives (n = 500) |
+|---|---|---|
+| nothing (full system) | 98.7% [97.9–99.2] | 0/500 [0–0.76%] |
+| alignment (blind only) | 68.4% [65.9–70.8] | 0/500 |
+| aspect-ratio retry (full / blind only) | 98.7% / 64.0% [61.4–66.5] | 0/500 |
+| BCH (exact 30 bits; full / blind only) | 80.8% [78.6–82.8] / 55.6% [52.9–58.2] | 1/500 |
+| HMAC tag | 98.7% (no robustness gain) | **6/500 = 1.2% [0.55–2.59]** |
+| texture mask (same v3 network, no mask) | 95.7% [94.4–96.6]; ABO 97.7 → 91.7% | – |
+
+- Alignment is the largest single contribution (−30 pp).
+- BCH next (−18 pp).
+- The HMAC tag costs no robustness and is what keeps false positives at 0.
+- The aspect-ratio retry matters for blind reads (marketplace_square 59 → 10/60) but alignment
+  covers it in the full pipeline.
+- Without the mask, whole-image ΔE is lower (0.63 vs 1.18) but background ΔE higher (0.76 vs 0.50).
+  The mask moves the change off the white background (same finding as the parameter study).
+  Part of the robustness drop is a train/test mismatch: v3 was trained with the mask.
+- HiDDeN v1 residual vs legacy embedding: PSNR 41.6 vs 25.0 dB (n = 10).
+- Every percentage in `output/thesis/*.md` has a 95% Wilson interval (`src/stats.py`).
+- `bash scripts/reproduce_all.sh` rebuilds all tables and figures.
