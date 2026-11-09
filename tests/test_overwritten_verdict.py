@@ -170,6 +170,6 @@ tests = sum((r["z_A"] is not None) + (r["z_B"] is not None) for r in neg)
 null_z = [z for r in neg for z in (r["z_A"], r["z_B"]) if z is not None]
 print(f"\nFALSE 'overwritten' on images without any issued copy: {pct_ci(fp, len(neg), 2)}"
       f"  ({tests} informed tests, highest z {max(null_z) if null_z else float('nan'):.2f})")
-print(f"Correct copy named among positives: {pct_ci(sum(r['named_A'] for r in pos), len(pos))}; "
+print(f"Our copy identified among positives (any verdict: still readable or overwritten): {pct_ci(sum(r['named_A'] for r in pos), len(pos))}; "
       f"wrong copy {sum(r['named_B'] for r in pos)}")
 print(f"\nCSV: output/overwritten_verdict_{TAG}.csv ({time.time() - t0:.0f}s)")
