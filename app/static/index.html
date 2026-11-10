@@ -123,6 +123,7 @@ const when = s => s ? new Date(s).toLocaleString([], {dateStyle:'medium', timeSt
 const VERDICT = {
   watermark:         ['Traced: watermark read directly', 'good', 'info', 'Watermark'],
   watermark_aligned: ['Traced: watermark read after alignment', 'good', 'info', 'Watermark (aligned)'],
+  watermark_overwritten: ['Overwritten: our watermark is still underneath (ownership dispute)', 'mid', 'warn', 'Overwritten'],
   fingerprint_only:  ['Same picture found, but the copy could not be traced', 'mid', 'warn', 'Picture only'],
   none:              ['No protected image found', 'none', 'dim', 'Nothing'],
 };
@@ -160,6 +161,20 @@ function stageStrip(stages) {
   </div>`;
 }
 
+/* Evidence for the watermark_overwritten verdict */
+function overwritePanel(o) {
+  const reg = o.registration;
+  return `<div class="card" style="margin-top:16px"><h3>Ownership evidence</h3>
+    <p class="muted small">The decoder could not read our ID, so the service checked whether the exact signal of each copy it issued is still in the image (informed check against 500 never-issued copies).</p>
+    <table>
+      <tr><td class="muted">Read by the blind decoder</td><td>${o.their_id != null ? `another valid ID, <b>#${o.their_id}</b> (not registered here): a watermark written over ours` : 'no valid ID: another watermark on top, or the image is degraded'}</td></tr>
+      <tr><td class="muted">Our copy found</td><td><b>#${o.copy_id}</b> of ${o.copies_tested} issued</td></tr>
+      ${o.informed_z != null ? `<tr><td class="muted">Informed check</td><td>z = <b>${o.informed_z.toFixed(1)}</b> (threshold ${o.z_threshold}), empirical p = ${(o.p_empirical ?? 0).toFixed(3)}</td></tr>` : ''}
+      ${o.dct_sim != null ? `<tr><td class="muted">DCT layer</td><td>similarity ${o.dct_sim.toFixed(1)} (threshold 6)</td></tr>` : ''}
+      <tr><td class="muted">Registration record</td><td>${reg ? `#${reg.seq}, ${when(reg.created_at)} · chain ${reg.chain_ok ? 'intact' : '<b style="color:var(--bad)">broken</b>'}` : 'none (copy issued before the log existed)'}</td></tr>
+    </table></div>`;
+}
+
 /* Shared result panel for Attack Lab and Scan */
 function resultPanel(r, ctx = {}) {
   let [title, kind] = VERDICT[r.verdict];
@@ -172,6 +187,7 @@ function resultPanel(r, ctx = {}) {
   return `<div class="verdict ${kind}">${title}<small>${sub || 'No registered product matches this image.'} · ${r.seconds}s</small></div>
     ${stageStrip(r.stages)}
     <div class="shots">${shot(r.suspect_url, ctx.expected ? 'After the attack' : 'Suspect image')}${shot(r.aligned_url, 'Aligned to the original')}${shot(r.product && r.product.original_url, 'Registered original')}</div>
+    ${r.overwrite ? overwritePanel(r.overwrite) : ''}
     ${r.bits ? `<h3 style="margin-top:18px">Bits read from the image</h3>${bitGrid(r.bits, r.expected_bits)}` : ''}
     ${r.detection_id ? `<p style="margin-top:14px"><a class="btn ghost sm" href="/report/${r.detection_id}" target="_blank">Open evidence report</a></p>` : ''}`;
 }
@@ -321,7 +337,7 @@ async function lab(params) {
     const list = attacks.filter(a => a.available); const rows = [];
     const draw = done => $('#out').innerHTML = `<div class="card"><h2>All attacks ${done ? '' : `<span class="muted small">(${rows.length}/${list.length})</span>`}</h2>
       <p class="muted small">${rows.filter(r => r.traced).length} of ${rows.length} traced to the right copy${rows.some(r => r.wrong) ? ` · <span style="color:var(--bad)">${rows.filter(r => r.wrong).length} wrong</span>` : ''}.</p>
-      <table><tr><th>Attack</th><th>Outcome</th><th>How</th><th>Time</th></tr>${rows.map(r => `<tr><td>${esc(r.attack)}</td><td>${r.wrong ? '<span class="pill bad">Wrong copy</span>' : r.traced ? '<span class="pill ok">Traced</span>' : r.result.verdict === 'fingerprint_only' ? '<span class="pill warn">Picture only</span>' : '<span class="pill bad">Lost</span>'}</td><td class="muted small">${r.result.verdict === 'watermark' ? 'blind read' : r.result.verdict === 'watermark_aligned' ? 'retrieve → align → verify' : r.result.verdict === 'fingerprint_only' ? 'visual match, watermark unreadable' : '—'}</td><td class="muted small">${r.result.seconds}s</td></tr>`).join('')}</table></div>`;
+      <table><tr><th>Attack</th><th>Outcome</th><th>How</th><th>Time</th></tr>${rows.map(r => `<tr><td>${esc(r.attack)}</td><td>${r.wrong ? '<span class="pill bad">Wrong copy</span>' : r.traced ? '<span class="pill ok">Traced</span>' : r.result.verdict === 'fingerprint_only' ? '<span class="pill warn">Picture only</span>' : r.result.verdict === 'watermark_overwritten' ? '<span class="pill warn">Overwritten</span>' : '<span class="pill bad">Lost</span>'}</td><td class="muted small">${r.result.verdict === 'watermark' ? 'blind read' : r.result.verdict === 'watermark_aligned' ? 'retrieve → align → verify' : r.result.verdict === 'fingerprint_only' ? 'visual match, watermark unreadable' : r.result.verdict === 'watermark_overwritten' ? 'informed check found our copy underneath' : '—'}</td><td class="muted small">${r.result.seconds}s</td></tr>`).join('')}</table></div>`;
     for (const a of list) { rows.push(await run(a, a.slider ? a.slider.default : null, '')); draw(false); }
     draw(true);
   });

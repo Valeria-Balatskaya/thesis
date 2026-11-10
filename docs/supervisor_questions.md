@@ -482,3 +482,183 @@ writes into a different channel and cannot erase our ID. An insider with our key
 registration log. Code, tests and notebook are ready (`RUN = 'v4'`, docs/colab_v3.md). Results follow after the Colab
 run: `tests/test_v4_keys.py` (wrong keys, other-key and same-key overwrite) and
 `tests/test_v3_vs_v2.py 30 v4=checkpoints/hidden_v4_best.pt` (quality and robustness against v3).
+
+---
+
+# Meeting 3 — final phase (in progress, started 2026-11-09)
+
+Every percentage now has n and a 95% Wilson interval (`src/stats.py`). Objectives in brackets.
+
+## Part 1 — v4 secret-key model (1.2.3, 1.2.5)
+
+Waiting for the Colab run. Everything to evaluate it is ready and smoke-tested with a stand-in
+checkpoint (v3 weights + untrained key layers):
+- `tests/test_v4_keys.py`: wrong keys, other-key overwrite, same-key overwrite.
+- `tests/test_v3_vs_v2.py 30 v4=...`: now also a thief with *another key*.
+- `tests/test_overwrite_cost.py 20 20 v4=...`: v4 and v4+DCT, thief same key / other key, 1–4×.
+- `tests/test_rewatermark.py 20 20 <ckpt>` and `tests/test_in_the_wild.py ... <ckpt>`: take any
+  checkpoint.
+- `bash scripts/evaluate_v4.sh` runs all of them in sequence (~3–4 h).
+
+The app now uses a checkpoint only if it **loads**: a missing or broken `hidden_v4_best.pt` falls back
+to v3. `TRACEMARK_CHECKPOINT` pins one model, so copies already protected with v3 stay readable.
+
+## Part 2 — overwriting
+
+### 2.1 New verdict `watermark_overwritten` (ownership dispute)
+
+When a scan finds the registered picture but no readable ID, the app tests every issued copy of that
+product with the calibrated informed check (z against 500 never-issued copies, threshold 4), plus the
+DCT layer if present. If one of our copies is found, the verdict is `watermark_overwritten`.
+
+The scan result and the evidence report show:
+- the copy;
+- z and the empirical p;
+- the ID the blind decoder read instead (if any);
+- the signed registration record with its time.
+
+**Bug fixed on the way:** the app's ownership check rebuilt the reference with v2's settings
+(strength 0.7, flat mask 0.3), although the app embeds with v3 at 1.0 and its own mask.
+
+`tests/test_overwritten_verdict.py`: v3 as deployed, 40 photos (20 own + 20 ABO), two issued copies per
+product (A published, B never published):
+
+| Scenario | Should fire | Result (clean = JPEG q70) |
+|---|---|---|
+| thief re-protects copy A, same strength | yes | overwritten → A: 29/40 [57–84%]; ours still read directly: 11/40; **our copy identified 40/40** |
+| thief re-protects copy A, 1.5× | yes | overwritten → A: 31/40 [62–88%]; read directly: 2/40; same picture only: 7/40 |
+| clean original; original + thief's own mark; + Cox DCT; + LSB; + visible logo; rotate 8°; off-centre crop; page screenshot | no | **0/520 [0–0.73%]** overwritten; 1,034 informed tests, highest z 2.81 |
+
+- **The wrong copy (B) was never named.**
+- **A thief who watermarks a leaked *clean* original doesn't trigger the verdict** (0/80). This is
+  correct: our copy's signal isn't in that image.
+- Through the API (separate data folder, port 8765) the verdict, the evidence panel and the report
+  all worked. Copy #4097 was overwritten with v3 and an unregistered ID. Result: overwritten,
+  thief's ID 900000, z 4.9, record #1 verified. The other copy scored z 1.8.
+- **Cost:** each dispute scan builds the 500-decoy null once per issued copy, about 15 s per copy
+  on CPU. A product with 2 copies takes about 30 s per scan. It only runs when the result would
+  otherwise be "same picture".
+
+### 2.2 Overwrite-resistance table
+
+`tests/test_overwrite_cost.py` now covers:
+- v2, v3, v3+DCT, v4, v4+DCT;
+- thief with the same key or another key;
+- the thief's ID read with the thief's own key;
+- ownership with CIs;
+- a summary CSV for `scripts/thesis_tables.py`.
+
+**Runs when v4 arrives**, so all models are measured in one run.
+
+### 2.3 Spatial redundancy — design note
+
+`docs/spatial_redundancy.md`: tiles with per-tile keys. Expected trade-offs:
+- **Better:** large crops, and overwriting gets more expensive.
+- **Worse:** per-tile robustness, small thumbnails, and up to K× blind false positives.
+- **Risk:** seams at tile borders.
+
+It also describes a 1-day experiment without training.
+
+## Part 3 — real-world capture dataset (1.2.3, 1.4)
+
+Prepared:
+- `docs/real_world_protocol.md`: checklist.
+- `data/real_world/to_capture/`: 20 v3 copies + 10 controls (+ 20 v4 copies with `--add v4`),
+  viewer, listing pages, shop page, key page.
+- `scripts/sort_captures.py`: files captures by picture match, not by watermark.
+- `tests/test_real_world.py`: evaluation.
+
+Smoke test with 6 real headless-Chrome page captures:
+- 3/4 protected traced (all via alignment), 0/3 false positives.
+- **Finding:** an ABO fabric swatch (repetitive texture) gives SIFT 0 matching points, so neither
+  the sorter nor retrieval can place it. This is a retrieval limit to report.
+
+## Part 4 — comparison with pretrained watermarks (1.2.4, 1.4)
+
+`tests/test_baselines.py 30`: 90 photos (30 own + 30 ABO + 30 COCO) x 23 attacks = 2,070
+attacked images per system and setting. Tables: `output/thesis/baselines.md`. Chart:
+`thesis/figures/baselines.png`.
+
+Systems:
+- TrustMark (Adobe, model Q, 61 data bits);
+- Watermark Anything (WAM, Meta, MIT weights, 32 bits; we count it as detected when the
+  predicted mask covers ≥ 50% of the image);
+- ours (v3, 30 data bits).
+
+Settings:
+- "Matched" = each system's strength tuned by bisection to our ΔE (~1.1–1.2).
+- "+RAV" = the same Retrieve–Align–Verify wrapper around every system.
+- "Deployed" = our full app pipeline.
+
+| System | Setting | PSNR | ΔE / ΔE bg | False detections, clean | Blind | +RAV |
+|---|---|---|---|---|---|---|
+| ours v3 | default | 42.0 | 1.24 / 0.53 | 0/90 | 67.6% [65.6–69.6] | 97.5% [96.8–98.1]; deployed 98.9% [98.3–99.3] |
+| TrustMark | default | 43.9 | 0.41 / 0.31 | **2/90** | 72.0% [70.1–73.9] | 87.0% [85.4–88.3] |
+| TrustMark | matched (3.1x) | 34.6 | 1.12 / 0.77 | 2/90 | 70.8% [68.8–72.7] | 85.9% [84.4–87.4] |
+| WAM | default | 40.2 | 2.53 / 1.60 | 0/90 | 79.9% [78.1–81.5] | 91.0% [89.7–92.2] |
+| WAM | matched (0.86x) | 47.2 | 1.09 / 0.68 | 0/90 | 46.3% [44.2–48.5] | 66.6% [64.6–68.6] |
+
+Write-up notes:
+- **Our blind decoder is not the best.** Blind, ours (67.6%) is below TrustMark (72.0%) and WAM
+  (79.9%).
+  - WAM's lead comes at twice our ΔE (2.53; background 1.60, i.e. visible). At our ΔE, WAM falls
+    to 46.3%.
+  - TrustMark is the least visible (ΔE 0.41).
+  - Turning TrustMark up 3x to our ΔE does not make it more robust (70.8%).
+- **The pipeline is the main contribution, and it is system-independent.** RAV adds +29.9 pp to
+  ours, +15.0 to TrustMark and +11.1 to WAM. With RAV, ours is highest at equal or lower
+  visibility.
+- **Where the baselines win:**
+  - TrustMark reads blind:
+    - native screenshot: 90/90 (ours 39/90);
+    - screen photo: 69/90 (ours 34);
+    - print-photo: 90/90 (ours 77).
+  - TrustMark and WAM read mirrored images blind (89–90/90). Ours reads 0 blind and 83/90 even
+    with RAV.
+  - WAM reads off-centre crops blind (70%: 90/90, 50%: 58/90; ours 0 blind).
+  - WAM reads perspective blind: 80/90.
+- **Where ours wins:**
+  - inpaint 89/90 (TrustMark 63);
+  - brightness 89 (TrustMark 76, WAM 82);
+  - Instagram filter 88 (70 / 79);
+  - CDN WebP 360 px 87 (72 / 33);
+  - JPEG q30 89 (WAM 45).
+  - TrustMark stays at 14/90 on the 70% off-centre crop and 0/90 on the 50% crop even after
+    alignment. Ours: 85 and 63.
+- **False positives:** TrustMark detected a watermark in 2/90 clean originals [1–8%]. Ours and WAM:
+  0/90 [0–4%]. n = 90 is small; our own false-positive evidence is 0/500 (ablation) and 0/2,064
+  (test_hidden_v2_eval).
+- **Speed:** all comparable at 1024 px. Embed 0.16 / 0.19 / 0.28 s, read 0.04 / 0.06 / 0.17 s
+  (ours / TrustMark / WAM, M1 CPU).
+- **Fairness caveats:**
+  - Payloads differ (30 vs 61 vs 32 bits).
+  - The baselines are general-purpose, while ours was trained on product photos (the evaluation
+    split is never used in training).
+  - The WAM detection rule is ours.
+  - "Matched" means matched whole-image ΔE, not matched background ΔE.
+
+## Part 5 — ablation, statistics, reproduction (1.4)
+
+`tests/test_ablation.py 30 30 500`: v3, 60 photos (30 own + 30 ABO) x 23 attacks = 1,380;
+false positives on 500 never-protected ABO photos. Table: `output/thesis/ablation.md`.
+
+| Removed | Traced | False positives (n = 500) |
+|---|---|---|
+| nothing (full system) | 98.7% [97.9–99.2] | 0/500 [0–0.76%] |
+| alignment (blind only) | 68.4% [65.9–70.8] | 0/500 |
+| aspect-ratio retry (full / blind only) | 98.7% / 64.0% [61.4–66.5] | 0/500 |
+| BCH (exact 30 bits; full / blind only) | 80.8% [78.6–82.8] / 55.6% [52.9–58.2] | 1/500 |
+| HMAC tag | 98.7% (no robustness gain) | **6/500 = 1.2% [0.55–2.59]** |
+| texture mask (same v3 network, no mask) | 95.7% [94.4–96.6]; ABO 97.7 → 91.7% | – |
+
+- Alignment is the largest single contribution (−30 pp).
+- BCH next (−18 pp).
+- The HMAC tag costs no robustness and is what keeps false positives at 0.
+- The aspect-ratio retry matters for blind reads (marketplace_square 59 → 10/60) but alignment
+  covers it in the full pipeline.
+- Without the mask, whole-image ΔE is lower (0.63 vs 1.18) but background ΔE higher (0.76 vs 0.50).
+  The mask moves the change off the white background (same finding as the parameter study).
+  Part of the robustness drop is a train/test mismatch: v3 was trained with the mask.
+- HiDDeN v1 residual vs legacy embedding: PSNR 41.6 vs 25.0 dB (n = 10).
+- Every percentage in `output/thesis/*.md` has a 95% Wilson interval (`src/stats.py`).
+- `bash scripts/reproduce_all.sh` rebuilds all tables and figures.

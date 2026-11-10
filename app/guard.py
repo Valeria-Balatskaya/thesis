@@ -15,7 +15,7 @@ from PIL import Image
 
 from app import registry_log, store
 from src import attacks, ecommerce_attacks as ea, modern_attacks as ma
-from src.defence import DefencePipeline, ownership_check
+from src.defence import DefencePipeline, ownership_check, mark_overwritten
 from src import dct_layer
 from src.hidden_v2_inference import HiddenV2Model
 from src.metrics import compute as quality
@@ -28,12 +28,34 @@ try:                                  # iPhone photos
 except ImportError:
     pass
 
-# hidden_v3_best.pt (trained with a colour charge and flat-area masking, see
-# notebooks/train_hidden_v2.ipynb) is preferred when present.
-# hidden_v4_best.pt (secret-key model) is preferred over v3, v3 over v2.
-CHECKPOINT = next((c for c in ("checkpoints/hidden_v4_best.pt", "checkpoints/hidden_v3_best.pt",
-                               "checkpoints/hidden_v2_best.pt")
-                   if Path(c).exists()), "checkpoints/hidden_v2_best.pt")
+# Model choice: hidden_v4_best.pt (secret-key model) over v3 over v2, taking the
+# first file that exists AND loads as a HiDDeN v2-family checkpoint, so a missing
+# or broken v4 file falls back to v3. TRACEMARK_CHECKPOINT pins one file (e.g. to
+# keep reading copies protected with an older model: copies made with one model
+# cannot be read by another).
+CHECKPOINT_CANDIDATES = ("checkpoints/hidden_v4_best.pt", "checkpoints/hidden_v3_best.pt",
+                         "checkpoints/hidden_v2_best.pt")
+
+
+def pick_checkpoint(candidates=CHECKPOINT_CANDIDATES) -> str:
+    pinned = os.environ.get("TRACEMARK_CHECKPOINT")
+    if pinned:
+        return pinned
+    import torch
+    for c in candidates:
+        if not Path(c).exists():
+            continue
+        try:
+            ckpt = torch.load(c, map_location="cpu", weights_only=False)
+            if ckpt.get("arch") == "hidden_v2" and "model" in ckpt:
+                return c
+            print(f"[guard] {c} is not a HiDDeN v2-family checkpoint, skipped")
+        except Exception as e:                       # truncated download etc.
+            print(f"[guard] {c} could not be loaded ({e.__class__.__name__}), skipped")
+    return candidates[-1]
+
+
+CHECKPOINT = pick_checkpoint()
 DATA = store.DATA_DIR
 MAX_SIDE = 1600                       # uploads are downscaled to this
 # Watermark visibility settings. At full strength (1.0 = 40 dB, as trained) the
@@ -158,9 +180,11 @@ def ownership(product_id: int, aligned_rgb: np.ndarray) -> list[dict]:
         ref = dct_reference_path(c["id"], product_id)
         ref_rgb = np.asarray(Image.open(ref).convert("RGB")) if ref.exists() else None
         with _lock:
-            r = ownership_check(model, aligned_rgb, original, c["id"], ref_rgb)
+            r = ownership_check(model, aligned_rgb, original, c["id"], ref_rgb,
+                                embed_kwargs={"strength": STRENGTH, "mask_floor": MASK_FLOOR})
         out.append({"copy_id": c["id"], "label": c["label"], "owned": r["owned"],
                     "informed_z": r["informed"]["z"] if r["informed"] else None,
+                    "p_empirical": r["informed"]["p_empirical"] if r["informed"] else None,
                     "dct_sim": r["dct"]["sim"] if r["dct"] else None})
     return out
 
@@ -285,9 +309,23 @@ def analyse(suspect_path: str, page_url: str | None = None, image_url: str | Non
     out = {"verdict": res["verdict"], "stages": res["stages"], "seconds": elapsed,
            "suspect_url": media_url(suspect_path), "product": None, "copy": None,
            "aligned_url": None, "bits": None, "expected_bits": None,
-           "authorized": None, "detection_id": None}
+           "authorized": None, "detection_id": None, "ownership": None, "overwrite": None}
     if res["verdict"] == "none":
         return out
+
+    # Same picture but no readable ID: is one of our copies' exact signal still
+    # underneath (someone wrote their own watermark over ours)? -> watermark_overwritten
+    if res["verdict"] == "fingerprint_only" and res["aligned"] is not None:
+        out["ownership"] = ownership(res["product_id"], res["aligned"])
+        mark_overwritten(res, out["ownership"])
+        if res["verdict"] == "watermark_overwritten":
+            reg = registry_log.verify_copy(res["copy_id"])
+            res["overwrite"]["registration"] = None if reg is None else {
+                "seq": reg["record"]["seq"], "created_at": reg["record"]["created_at"],
+                "record_hash": reg["record"]["record_hash"],
+                "chain_ok": reg["chain"]["ok"], "copy_hash_matches": reg["copy_matches"]}
+            out["verdict"], out["overwrite"] = res["verdict"], res["overwrite"]
+        out["seconds"] = round(time.time() - t0, 2)
 
     product = store.get_product(res["product_id"])
     out["product"] = {"id": product["id"], "title": product["title"],
@@ -306,16 +344,13 @@ def analyse(suspect_path: str, page_url: str | None = None, image_url: str | Non
         out["aligned_url"] = media_url(aligned_path)
 
     out["authorized"] = is_authorized(product["id"], page_url)
-    out["ownership"] = None
-    if res["verdict"] == "fingerprint_only" and res["aligned"] is not None:
-        out["ownership"] = ownership(product["id"], res["aligned"])
     if record:
         out["detection_id"] = store.record_detection(
             product_id=product["id"], copy_id=res["copy_id"], verdict=res["verdict"],
             image_url=image_url, page_url=page_url, snapshot_path=suspect_path,
             aligned_path=aligned_path, authorized=out["authorized"],
             details={"stages": res["stages"], "sha256": sha256(suspect_path),
-                     "ownership": out["ownership"]})
+                     "ownership": out["ownership"], "overwrite": out["overwrite"]})
     return out
 
 

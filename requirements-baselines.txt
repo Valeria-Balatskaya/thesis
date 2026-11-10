@@ -1,0 +1,9 @@
+# Optional: pretrained baselines for tests/test_baselines.py (Part 4).
+# Adobe TrustMark (MIT); first use downloads its weights (~100 MB) into the package.
+trustmark==0.9.2
+# Meta Watermark Anything: code + weights are fetched by scripts/get_baselines.sh
+# into third_party/watermark-anything (git-ignored). Its inference needs:
+einops==0.8.2
+omegaconf==2.4.0
+timm==1.0.31
+scikit-learn==1.9.1

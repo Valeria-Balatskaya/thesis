@@ -1,0 +1,42 @@
+@startuml component
+' TraceMark — component diagram (thesis ch. 4.1)
+skinparam componentStyle rectangle
+package "Browser" {
+  [Single-page UI\napp/static/index.html] as UI
+  [Evidence report\n/report/{id}] as REP
+}
+package "TraceMark server (FastAPI)" {
+  [Routes\napp/main.py] as API
+  [Service layer\napp/guard.py] as GUARD
+  [Web monitor\napp/crawler.py] as CRAWL
+  [Registration log\napp/registry_log.py\nEd25519 + hash chain] as LOG
+  database "SQLite\napp/store.py" as DB
+  folder "Image store\n(originals, copies)" as FS
+}
+package "Watermarking core (src/)" {
+  [HiDDeN v3/v4 model\nhidden_v2.py\nhidden_v2_inference.py] as MODEL
+  [Payload\npayload.py + bch.py\nID + HMAC tag + BCH] as PAY
+  [Retrieve-Align-Verify\ndefence.py\nSIFT + RANSAC] as RAV
+  [Informed check\nInformedChecker] as INF
+  [DCT layer (optional)\ndct_layer.py] as DCT
+}
+cloud "RFC 3161 TSA\n(optional)" as TSA
+cloud "Watched web pages" as WEB
+UI --> API : JSON / multipart
+REP --> API
+API --> GUARD
+GUARD --> MODEL
+GUARD --> RAV
+GUARD --> INF
+GUARD --> DCT
+GUARD --> LOG
+GUARD --> DB
+GUARD --> FS
+MODEL --> PAY
+RAV --> MODEL
+INF --> MODEL
+CRAWL --> WEB : HTTP GET
+CRAWL --> GUARD : analyse(image)
+LOG --> TSA : timestamp request
+LOG --> DB
+@enduml

@@ -51,9 +51,23 @@ class HiddenV2Model:
         self.model.load_state_dict(ckpt["model"])
         self.model.eval()
 
-    def key(self, batch: int = 1) -> torch.Tensor | None:
-        """The deployment key repeated for a batch (None for v2/v3)."""
-        return None if self._key is None else self._key.expand(batch, -1)
+    def key(self, batch: int = 1, key: torch.Tensor | None = None) -> torch.Tensor | None:
+        """
+        The deployment key repeated for a batch (None for v2/v3). `key` overrides it,
+        e.g. a thief's key in the overwrite tests (ignored by models without keys).
+        """
+        k = self._key if key is None else key.to(self.device).view(1, -1)
+        return None if (k is None or not self.key_dim) else k.expand(batch, -1)
+
+    def other_key(self, seed: int) -> torch.Tensor | None:
+        """A reproducible random key that differs from the deployment key (v4 only)."""
+        if not self.key_dim:
+            return None
+        g = torch.Generator().manual_seed(seed)
+        k = torch.randint(0, 2, (1, self.key_dim), generator=g).float().to(self.device)
+        if torch.equal(k, self._key.view(1, -1)):
+            k[0, 0] = 1 - k[0, 0]
+        return k
 
     def _load(self, image_path: str) -> torch.Tensor:
         arr = np.array(Image.open(image_path).convert("RGB"), dtype=np.float32) / 255
@@ -62,7 +76,7 @@ class HiddenV2Model:
     @torch.no_grad()
     def embed_bits(self, image_path: str, bits, output_path: str,
                    strength: float = 1.0, mask_floor: float | None = None,
-                   **mask_options) -> None:
+                   key: torch.Tensor | None = None, **mask_options) -> None:
         """
         Embed msg_len raw bits. strength scales the residual (1.0 = target_psnr).
         mask_floor < 1 weakens the watermark on flat areas (see hidden_v2.embedding_mask);
@@ -72,31 +86,31 @@ class HiddenV2Model:
         message = torch.tensor(np.asarray(bits), dtype=torch.float32,
                                device=self.device).view(1, self.msg_len)
         out = self.model.watermark(self._load(image_path), message, strength,
-                                   mask_floor=mask_floor, key=self.key(), **mask_options)
+                                   mask_floor=mask_floor, key=self.key(1, key), **mask_options)
         out = (out.squeeze(0).permute(1, 2, 0).cpu().numpy() * 255).round()
         Image.fromarray(out.astype(np.uint8)).save(output_path, format="PNG")
 
     @torch.no_grad()
-    def _decode_tensor(self, x: torch.Tensor) -> np.ndarray:
-        logits = self.model.decode(x, self.key(x.size(0))).squeeze(0)
+    def _decode_tensor(self, x: torch.Tensor, key: torch.Tensor | None = None) -> np.ndarray:
+        logits = self.model.decode(x, self.key(x.size(0), key)).squeeze(0)
         return (logits > 0).cpu().numpy().astype(np.uint8)
 
-    def decode_bits(self, image_path: str) -> np.ndarray:
-        return self._decode_tensor(self._load(image_path))
+    def decode_bits(self, image_path: str, key: torch.Tensor | None = None) -> np.ndarray:
+        return self._decode_tensor(self._load(image_path), key)
 
     # ─── product-ID payload (BCH protected, see src/payload.py) ───
 
     def embed_product(self, image_path: str, product_id: int, output_path: str,
                       strength: float = 1.0, mask_floor: float | None = None,
-                      **mask_options) -> dict:
+                      key: torch.Tensor | None = None, **mask_options) -> dict:
         if self.msg_len != PAYLOAD_BITS:
             raise ValueError(f"checkpoint embeds {self.msg_len} bits, payload needs {PAYLOAD_BITS}")
         self.embed_bits(image_path, encode_product_id(product_id), output_path, strength,
-                        mask_floor, **mask_options)
+                        mask_floor, key=key, **mask_options)
         return {"product_id": product_id, "output_path": output_path}
 
     def read_product(self, image_path: str, try_aspects: bool = True,
-                     aspect_ratios: list | None = None) -> dict:
+                     aspect_ratios: list | None = None, key: torch.Tensor | None = None) -> dict:
         """
         Blind detection. product_id is None when no valid watermark is found.
 
@@ -107,7 +121,7 @@ class HiddenV2Model:
         false positive: worst case len(ASPECT_RATIOS) + 1 times the single-read rate.
         """
         x = self._load(image_path)
-        bits = self._decode_tensor(x)
+        bits = self._decode_tensor(x, key)
         result = {**decode_payload(bits), "bits": bits, "aspect": None}
         if result["product_id"] is not None or not try_aspects:
             return result
@@ -120,7 +134,7 @@ class HiddenV2Model:
             canvas = torch.full((1, 3, new_h, new_w), 0.5, device=x.device)
             top, left = (new_h - h) // 2, (new_w - w) // 2
             canvas[:, :, top:top + h, left:left + w] = x
-            attempt = decode_payload(self._decode_tensor(canvas))
+            attempt = decode_payload(self._decode_tensor(canvas, key))
             if attempt["product_id"] is not None:
                 return {**attempt, "bits": bits, "aspect": f"{aw}:{ah}"}
         return result

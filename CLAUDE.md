@@ -48,6 +48,11 @@ AI edits) back to the seller/product it came from. The author develops on a Mac
   screenshot, phone photo of screen, messenger recompress, promo overlay, inpaint,
   upscale; AI: `regenerate_vae` (SD VAE), `replace_background` (rembg) — optional,
   `pip install -r requirements-ai.txt`
+- `src/stats.py` — Wilson 95% intervals (`pct_ci`, `frac_ci`); every thesis percentage uses them
+- `src/attack_suite.py` — the 23-attack thesis suite (same list as test_v3_vs_v2)
+- `src/baselines.py` — TrustMark (pip `trustmark`, Q, BCH_5, 61 bits) and Watermark Anything
+  (third_party/, MIT weights, 32 bits, detected = predicted mask >= 50%) behind one interface;
+  `bash scripts/get_baselines.sh`, `requirements-baselines.txt`
 - `app/` — **TraceMark** web app (FastAPI + SQLite, single-page UI in `app/static/index.html`):
   `main.py` routes, `guard.py` service (protect / analyse / attack lab, `STRENGTH = 0.5`;
   `precheck()` refuses uploads that are already watermarked or registered -> HTTP 409;
@@ -230,6 +235,32 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
   (20,000 steps); evaluate with tests/test_v4_keys.py and test_v3_vs_v2.py 30 v4=... .
   App prefers checkpoints/hidden_v4_best.pt. Not trained yet (waiting for the Colab run).
 
+## Final phase (2026-11-09, branch feature/final-phase, docs/supervisor_questions.md "Meeting 3")
+- `~/thesis/.venv` now has every requirement (+ AI, + baselines): use `.venv/bin/python`.
+- v4 tooling ready: `HiddenV2Model` takes `key=` on embed/read and `other_key(seed)`; tests have
+  same-key and other-key thieves; `bash scripts/evaluate_v4.sh` runs the whole v4-vs-v3 evaluation.
+  App picks the first checkpoint that loads (v4 -> v3 -> v2); `TRACEMARK_CHECKPOINT` pins one.
+- New verdict `watermark_overwritten` (`defence.mark_overwritten`, app scan + report): fingerprint_only
+  + informed z >= 4 (or DCT layer) for one issued copy. tests/test_overwritten_verdict.py (v3, 40
+  photos, 2 copies each): our copy identified 40/40 (same-strength thief; 29 as overwritten), 33/40
+  at 1.5x; false verdicts 0/520 (1,034 tests, max z 2.81); wrong copy never. ~15 s per issued copy.
+  Fixed: app ownership check used v2 embed settings with v3.
+- Real-world captures: docs/real_world_protocol.md, scripts/prepare_real_world.py (data/real_world/,
+  git-ignored), scripts/sort_captures.py, tests/test_real_world.py. Repetitive textures (ABO fabric
+  swatch) give SIFT 0 matches -> retrieval limit.
+- tests/test_baselines.py (resumable, output/baselines/), tests/test_ablation.py (output/ablation/),
+  scripts/reproduce_all.sh (~13-15 h) + scripts/thesis_tables.py -> output/thesis/*.md, thesis/figures/.
+- thesis/: outline.md (objective mapping INFERRED, user must confirm wording), references.bib (36,
+  recent ones verified online), uml/*.puml (render: brew install plantuml; scripts/render_uml.sh).
+- Baselines (tests/test_baselines.py 30; 90 photos x 23 attacks = 2,070 each): blind / +RAV / clean FP.
+  ours v3 67.6 / 97.5% (deployed 98.9%), dE 1.24, 0/90; TrustMark Q 72.0 / 87.0%, dE 0.41, 2/90;
+  WAM 79.9 / 91.0%, dE 2.53 (visible), 0/90; at matched dE ~1.1: TrustMark 70.8 / 85.9, WAM 46.3 / 66.6.
+  Our blind decoder is not the best; RAV is the contribution and helps every system. TrustMark wins
+  blind on screenshots/screen photos/print, WAM on off-centre crops/perspective, both on mirror.
+- Ablation (tests/test_ablation.py, v3, 60 photos x 23 = 1,380, 500 negatives): full 98.7%;
+  -alignment 68.4%; -aspect retry 98.7% full / 64.0% blind; -BCH 80.8% (FP 1/500); -HMAC tag
+  FP 6/500; -texture mask 95.7% (dE bg 0.50 -> 0.76).
+
 ## Working rules learned the hard way
 - The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
   seed it. Test with `TRACEMARK_DATA=<other folder> uvicorn app.main:app --port 8765`.
@@ -253,7 +284,9 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
    check, registration log, copy-attack check, overhead + parameter study
 11. ✅ v3 trained and evaluated (tests/test_v3_vs_v2.py); app uses it
 12. v4 secret-key model: code ready, user trains in Colab (RUN='v4'), then test_v4_keys
-13. **Next:** real-world capture dataset (own screenshots / phone photos / messenger), comparison
+13. Final phase (Meeting 3): v4 eval, overwritten verdict ✅, real-world tooling ✅ (captures: user),
+   baselines + ablation ✅, reproduce_all ✅, thesis scaffolding ✅
+14. **Next:** real-world capture dataset (own screenshots / phone photos / messenger), comparison
    with pretrained watermarks, thesis writing. Later: key-conditioned model, C2PA soft
    binding, global retrieval index
 

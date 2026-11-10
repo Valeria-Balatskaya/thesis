@@ -12,7 +12,9 @@
 #    "screenshot the listing": real browser scaling and colour handling, the
 #    photo surrounded by page layout and text.
 #
-# Run: python tests/test_in_the_wild.py [image_folder] [n_images] [strength] [mask_floor]
+# Run: python tests/test_in_the_wild.py [image_folder] [n_images] [strength] [mask_floor] [checkpoint]
+#      mask_floor "none" = as trained (v3/v4), e.g.
+#      python tests/test_in_the_wild.py data/products_png 12 1.0 none checkpoints/hidden_v4_best.pt
 
 import sys, os, csv, shutil, subprocess, html
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -21,11 +23,13 @@ from src.hidden_v2_inference import HiddenV2Model
 from src.defence import DefencePipeline
 from src import modern_attacks as ma
 
-CHECKPOINT = "checkpoints/hidden_v2_best.pt"
+CHECKPOINT = sys.argv[5] if len(sys.argv) > 5 else "checkpoints/hidden_v2_best.pt"
 IMAGE_DIR = sys.argv[1] if len(sys.argv) > 1 else "data/products_png"
 N = int(sys.argv[2]) if len(sys.argv) > 2 else 20
 STRENGTH = float(sys.argv[3]) if len(sys.argv) > 3 else 0.7
-MASK_FLOOR = float(sys.argv[4]) if len(sys.argv) > 4 else 0.3
+MASK_FLOOR = (None if len(sys.argv) > 4 and sys.argv[4].lower() == "none"
+              else float(sys.argv[4]) if len(sys.argv) > 4 else 0.3)
+TAG = "" if len(sys.argv) <= 5 else "_" + os.path.basename(CHECKPOINT).replace(".pt", "")
 
 CDN_SIZES = [1024, 720, 512, 360, 192, 128, 64]
 # (label, CSS width of the photo, window width, window height, device pixel ratio)
@@ -135,8 +139,8 @@ button{{background:#ff5a00;color:#fff;border:0;padding:12px 28px;font-size:16px}
         c = show(label, outcomes)
         rows.append({"part": "browser", "condition": label, "n": len(outcomes), **c})
 
-with open("output/in_the_wild.csv", "w", newline="") as f:
+with open(f"output/in_the_wild{TAG}.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
     w.writeheader(); w.writerows(rows)
-print("\nCSV: output/in_the_wild.csv   captures: results/in_the_wild/")
+print(f"\nCSV: output/in_the_wild{TAG}.csv   captures: results/in_the_wild/")
 sys.exit(1 if any(r["WRONG"] for r in rows) else 0)

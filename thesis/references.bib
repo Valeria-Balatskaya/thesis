@@ -1,0 +1,216 @@
+% thesis/references.bib
+% Every work/tool the project uses. Recent items (TrustMark, Watermark Anything,
+% Zhao et al., ABO, C2PA) were checked against the publisher / arXiv pages on 2026-11-09;
+% classic items are standard citations. Check page ranges once more against the PDF you cite.
+
+% ─── Watermarking foundations ─────────────────────────────────────
+@article{cox1997secure,
+  author  = {Cox, Ingemar J. and Kilian, Joe and Leighton, F. Thomson and Shamoon, Talal},
+  title   = {Secure Spread Spectrum Watermarking for Multimedia},
+  journal = {IEEE Transactions on Image Processing},
+  volume  = {6}, number = {12}, pages = {1673--1687}, year = {1997},
+  doi     = {10.1109/83.650120}
+}
+@book{cox2008digital,
+  author    = {Cox, Ingemar J. and Miller, Matthew L. and Bloom, Jeffrey A. and Fridrich, Jessica and Kalker, Ton},
+  title     = {Digital Watermarking and Steganography},
+  edition   = {2nd}, publisher = {Morgan Kaufmann}, year = {2008}
+}
+@inproceedings{vanschyndel1994digital,
+  author    = {van Schyndel, Ron G. and Tirkel, Andrew Z. and Osborne, Charles F.},
+  title     = {A Digital Watermark},
+  booktitle = {Proc. IEEE International Conference on Image Processing (ICIP)},
+  volume    = {2}, pages = {86--90}, year = {1994}
+}
+@article{chan2004hiding,
+  author  = {Chan, Chi-Kwong and Cheng, L. M.},
+  title   = {Hiding Data in Images by Simple {LSB} Substitution},
+  journal = {Pattern Recognition}, volume = {37}, number = {3}, pages = {469--474}, year = {2004}
+}
+@article{barni2001improved,
+  author  = {Barni, Mauro and Bartolini, Franco and Piva, Alessandro},
+  title   = {Improved Wavelet-Based Watermarking Through Pixel-Wise Masking},
+  journal = {IEEE Transactions on Image Processing}, volume = {10}, number = {5}, pages = {783--791}, year = {2001}
+}
+@article{liu2002svd,
+  author  = {Liu, Ruizhen and Tan, Tieniu},
+  title   = {An {SVD}-Based Watermarking Scheme for Protecting Rightful Ownership},
+  journal = {IEEE Transactions on Multimedia}, volume = {4}, number = {1}, pages = {121--128}, year = {2002}
+}
+@article{kutter1998color,
+  author  = {Kutter, Martin and Jordan, Fr{\'e}d{\'e}ric and Bossen, Frank},
+  title   = {Digital Watermarking of Color Images Using Amplitude Modulation},
+  journal = {Journal of Electronic Imaging}, volume = {7}, number = {2}, pages = {326--332}, year = {1998}
+}
+@inproceedings{voloshynovskiy1999stochastic,
+  author    = {Voloshynovskiy, Sviatoslav and Herrigel, Alexander and Baumgaertner, Nazanin and Pun, Thierry},
+  title     = {A Stochastic Approach to Content Adaptive Digital Image Watermarking},
+  booktitle = {Information Hiding (IH 1999)},
+  series    = {Lecture Notes in Computer Science}, volume = {1768}, pages = {211--236},
+  publisher = {Springer}, year = {1999}, doi = {10.1007/10719724_16}
+}
+
+% ─── Attacks and ownership ────────────────────────────────────────
+@inproceedings{craver1997can,
+  author    = {Craver, Scott and Memon, Nasir and Yeo, Boon-Lock and Yeung, Minerva M.},
+  title     = {Can Invisible Watermarks Resolve Rightful Ownerships?},
+  booktitle = {Storage and Retrieval for Image and Video Databases V},
+  series    = {Proc. SPIE}, volume = {3022}, pages = {310--321}, year = {1997}
+}
+@article{craver1998resolving,
+  author  = {Craver, Scott and Memon, Nasir and Yeo, Boon-Lock and Yeung, Minerva M.},
+  title   = {Resolving Rightful Ownerships with Invisible Watermarking Techniques: Limitations, Attacks, and Implications},
+  journal = {IEEE Journal on Selected Areas in Communications}, volume = {16}, number = {4}, pages = {573--586}, year = {1998}
+}
+@inproceedings{kutter2000copy,
+  author    = {Kutter, Martin and Voloshynovskiy, Sviatoslav and Herrigel, Alexander},
+  title     = {The Watermark Copy Attack},
+  booktitle = {Security and Watermarking of Multimedia Contents II},
+  series    = {Proc. SPIE}, volume = {3971}, pages = {371--379}, year = {2000}
+}
+@inproceedings{zhao2024invisible,
+  author    = {Zhao, Xuandong and Zhang, Kexun and Su, Zihao and Vasan, Saastha and Grishchenko, Ilya and Kruegel, Christopher and Vigna, Giovanni and Wang, Yu-Xiang and Li, Lei},
+  title     = {Invisible Image Watermarks Are Provably Removable Using Generative {AI}},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, volume = {37}, year = {2024},
+  note      = {arXiv:2306.01953}
+}
+
+% ─── Deep-learning watermarking ───────────────────────────────────
+@inproceedings{zhu2018hidden,
+  author    = {Zhu, Jiren and Kaplan, Russell and Johnson, Justin and Fei-Fei, Li},
+  title     = {{HiDDeN}: Hiding Data with Deep Networks},
+  booktitle = {Computer Vision -- ECCV 2018},
+  series    = {Lecture Notes in Computer Science}, volume = {11219}, pages = {682--697},
+  publisher = {Springer}, year = {2018}
+}
+@inproceedings{tancik2020stegastamp,
+  author    = {Tancik, Matthew and Mildenhall, Ben and Ng, Ren},
+  title     = {{StegaStamp}: Invisible Hyperlinks in Physical Photographs},
+  booktitle = {Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {2117--2126}, year = {2020}
+}
+@misc{bui2023trustmark,
+  author        = {Bui, Tu and Agarwal, Shruti and Collomosse, John},
+  title         = {{TrustMark}: Universal Watermarking for Arbitrary Resolution Images},
+  year          = {2023}, eprint = {2311.18297}, archivePrefix = {arXiv}, primaryClass = {cs.CV},
+  note          = {Code: \url{https://github.com/adobe/trustmark}, PyPI package trustmark 0.9.2}
+}
+@inproceedings{sander2025watermark,
+  author    = {Sander, Tom and Fernandez, Pierre and Durmus, Alain Oliviero and Furon, Teddy and Douze, Matthijs},
+  title     = {Watermark Anything with Localized Messages},
+  booktitle = {International Conference on Learning Representations (ICLR)}, year = {2025},
+  note      = {arXiv:2411.07231. Code and MIT weights: \url{https://github.com/facebookresearch/watermark-anything}}
+}
+@inproceedings{fernandez2023stable,
+  author    = {Fernandez, Pierre and Couairon, Guillaume and J{\'e}gou, Herv{\'e} and Douze, Matthijs and Furon, Teddy},
+  title     = {The Stable Signature: Rooting Watermarks in Latent Diffusion Models},
+  booktitle = {Proc. IEEE/CVF International Conference on Computer Vision (ICCV)}, year = {2023}
+}
+@inproceedings{wen2023treering,
+  author    = {Wen, Yuxin and Kirchenbauer, John and Geiping, Jonas and Goldstein, Tom},
+  title     = {Tree-Ring Watermarks: Fingerprints for Diffusion Images that are Invisible and Robust},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)}, volume = {36}, year = {2023}
+}
+@inproceedings{perez2018film,
+  author    = {Perez, Ethan and Strub, Florian and de Vries, Harm and Dumoulin, Vincent and Courville, Aaron},
+  title     = {{FiLM}: Visual Reasoning with a General Conditioning Layer},
+  booktitle = {Proc. AAAI Conference on Artificial Intelligence}, volume = {32}, year = {2018}
+}
+
+% ─── Geometry, retrieval, image quality ───────────────────────────
+@article{lowe2004distinctive,
+  author  = {Lowe, David G.},
+  title   = {Distinctive Image Features from Scale-Invariant Keypoints},
+  journal = {International Journal of Computer Vision}, volume = {60}, number = {2}, pages = {91--110}, year = {2004}
+}
+@article{fischler1981random,
+  author  = {Fischler, Martin A. and Bolles, Robert C.},
+  title   = {Random Sample Consensus: A Paradigm for Model Fitting with Applications to Image Analysis and Automated Cartography},
+  journal = {Communications of the ACM}, volume = {24}, number = {6}, pages = {381--395}, year = {1981}
+}
+@article{wang2004ssim,
+  author  = {Wang, Zhou and Bovik, Alan C. and Sheikh, Hamid R. and Simoncelli, Eero P.},
+  title   = {Image Quality Assessment: From Error Visibility to Structural Similarity},
+  journal = {IEEE Transactions on Image Processing}, volume = {13}, number = {4}, pages = {600--612}, year = {2004}
+}
+@article{sharma2005ciede2000,
+  author  = {Sharma, Gaurav and Wu, Wencheng and Dalal, Edul N.},
+  title   = {The {CIEDE2000} Color-Difference Formula: Implementation Notes, Supplementary Test Data, and Mathematical Observations},
+  journal = {Color Research \& Application}, volume = {30}, number = {1}, pages = {21--30}, year = {2005}
+}
+
+% ─── Coding, cryptography, provenance ─────────────────────────────
+@article{hocquenghem1959codes,
+  author  = {Hocquenghem, Alexis},
+  title   = {Codes correcteurs d'erreurs},
+  journal = {Chiffres}, volume = {2}, pages = {147--156}, year = {1959}
+}
+@article{bose1960class,
+  author  = {Bose, Raj Chandra and Ray-Chaudhuri, Dwijendra K.},
+  title   = {On a Class of Error Correcting Binary Group Codes},
+  journal = {Information and Control}, volume = {3}, number = {1}, pages = {68--79}, year = {1960}
+}
+@misc{rfc2104,
+  author = {Krawczyk, Hugo and Bellare, Mihir and Canetti, Ran},
+  title  = {{HMAC}: Keyed-Hashing for Message Authentication},
+  howpublished = {RFC 2104, IETF}, year = {1997}, doi = {10.17487/RFC2104}
+}
+@article{bernstein2012ed25519,
+  author  = {Bernstein, Daniel J. and Duif, Niels and Lange, Tanja and Schwabe, Peter and Yang, Bo-Yin},
+  title   = {High-Speed High-Security Signatures},
+  journal = {Journal of Cryptographic Engineering}, volume = {2}, number = {2}, pages = {77--89}, year = {2012}
+}
+@misc{rfc8032,
+  author = {Josefsson, Simon and Liusvaara, Ilari},
+  title  = {Edwards-Curve Digital Signature Algorithm ({EdDSA})},
+  howpublished = {RFC 8032, IETF}, year = {2017}, doi = {10.17487/RFC8032}
+}
+@misc{rfc3161,
+  author = {Adams, Carlisle and Cain, Pat and Pinkas, Denis and Zuccherato, Robert},
+  title  = {Internet {X.509} Public Key Infrastructure Time-Stamp Protocol ({TSP})},
+  howpublished = {RFC 3161, IETF}, year = {2001}, doi = {10.17487/RFC3161}
+}
+@techreport{c2pa2025spec,
+  author      = {{Coalition for Content Provenance and Authenticity}},
+  title       = {{C2PA} Technical Specification, Version 2.2},
+  institution = {C2PA}, year = {2025},
+  url         = {https://c2pa.org/specifications/specifications/2.2/specs/C2PA_Specification.html},
+  note        = {Soft bindings (watermarks, fingerprints) in the section on bindings; cite the version you read}
+}
+
+% ─── Statistics ───────────────────────────────────────────────────
+@article{wilson1927probable,
+  author  = {Wilson, Edwin B.},
+  title   = {Probable Inference, the Law of Succession, and Statistical Inference},
+  journal = {Journal of the American Statistical Association}, volume = {22}, number = {158}, pages = {209--212}, year = {1927}
+}
+@article{brown2001interval,
+  author  = {Brown, Lawrence D. and Cai, T. Tony and DasGupta, Anirban},
+  title   = {Interval Estimation for a Binomial Proportion},
+  journal = {Statistical Science}, volume = {16}, number = {2}, pages = {101--133}, year = {2001}
+}
+
+% ─── Data and generative models used in attacks ───────────────────
+@inproceedings{collins2022abo,
+  author    = {Collins, Jasmine and Goel, Shubham and Deng, Kenan and Luthra, Achleshwar and Xu, Leon and Gundogdu, Erhan and Zhang, Xi and Yago Vicente, Tomas F. and Dideriksen, Thomas and Arora, Himanshu and Guillaumin, Matthieu and Malik, Jitendra},
+  title     = {{ABO}: Dataset and Benchmarks for Real-World {3D} Object Understanding},
+  booktitle = {Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {21126--21136}, year = {2022}, doi = {10.1109/CVPR52688.2022.02045}
+}
+@inproceedings{lin2014coco,
+  author    = {Lin, Tsung-Yi and Maire, Michael and Belongie, Serge and Hays, James and Perona, Pietro and Ramanan, Deva and Doll{\'a}r, Piotr and Zitnick, C. Lawrence},
+  title     = {Microsoft {COCO}: Common Objects in Context},
+  booktitle = {Computer Vision -- ECCV 2014},
+  series    = {Lecture Notes in Computer Science}, volume = {8693}, pages = {740--755}, year = {2014}
+}
+@inproceedings{rombach2022ldm,
+  author    = {Rombach, Robin and Blattmann, Andreas and Lorenz, Dominik and Esser, Patrick and Ommer, Bj{\"o}rn},
+  title     = {High-Resolution Image Synthesis with Latent Diffusion Models},
+  booktitle = {Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {10684--10695}, year = {2022}
+}
+@article{qin2020u2net,
+  author  = {Qin, Xuebin and Zhang, Zichen and Huang, Chenyang and Dehghan, Masood and Zaiane, Osmar R. and Jagersand, Martin},
+  title   = {{U$^2$-Net}: Going Deeper with Nested {U}-Structure for Salient Object Detection},
+  journal = {Pattern Recognition}, volume = {106}, pages = {107404}, year = {2020}
+}

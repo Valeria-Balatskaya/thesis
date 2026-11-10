@@ -166,7 +166,9 @@ def api_lab_run(copy_id: int = Form(...), attack: str = Form(...),
     except ImportError as e:
         raise HTTPException(501, f"this attack needs an optional package: {e}")
     result = guard.analyse(attacked)
-    traced = result["copy"] is not None and result["copy"]["id"] == copy_id
+    # an informed-check hit (watermark_overwritten) is evidence, not a trace: own pill
+    traced = (result["copy"] is not None and result["copy"]["id"] == copy_id
+              and result["verdict"] != "watermark_overwritten")
     wrong = result["copy"] is not None and result["copy"]["id"] != copy_id
     return {"attack": guard.LAB_ATTACKS[attack][0], "attacked_url": guard.media_url(attacked),
             "expected_copy_id": copy_id, "expected_product_id": copy["product_id"],
@@ -256,6 +258,16 @@ _VERDICT_TEXT = {
                           "into place, and the watermark was then read. Areas the found image does not "
                           "cover were filled from the un-watermarked original, which cannot contribute "
                           "watermark signal."),
+    "watermark_overwritten": ("Overwritten: our watermark found underneath (ownership dispute)",
+                              "The found image shows the registered photograph, but the blind decoder "
+                              "could not read our ID from it: either someone wrote another watermark over "
+                              "ours, or the image was degraded too far for the decoder. The service then ran "
+                              "an informed check, which it can do only because it holds the clean original and "
+                              "every copy it issued. It measured how strongly the exact signal of each of this "
+                              "product's copies is present, against 500 copies that were never issued "
+                              "(z-score). The copy below exceeded the calibrated threshold. This is evidence "
+                              "that the found image was made from that issued copy, i.e. our mark predates "
+                              "any mark on top of it. It is not a blind read."),
     "fingerprint_only": ("Same picture, watermark not readable",
                          "The found image shows the same photograph as the registered original "
                          "(matched by visual features and structure), but the watermark could not be read. "
@@ -337,10 +349,32 @@ def report(detection_id: int):
             facts.append(f"After alignment {verify['bit_errors']} of {PAYLOAD_BITS} bits differed from this "
                          f"copy's code; up to {verify['limit']} are accepted at a false-positive rate of 1e-6.")
 
+    ow = d["details"].get("overwrite")
+    if ow:
+        facts.append("Blind decoder result: " + (
+            f"a different, valid TraceMark ID (#{ow['their_id']}) that is not registered to this "
+            "product, i.e. a second watermark made with our system was written over ours."
+            if ow.get("their_id") is not None else
+            "no valid ID (another system's or another key's watermark on top, or a degraded image)."))
+        z = ow.get("informed_z")
+        if z is not None:
+            facts.append(f"Our copy #{ow['copy_id']}: informed z = {z:.1f} against 500 never-issued "
+                         f"copies (threshold {ow['z_threshold']:.0f}; empirical p = "
+                         f"{ow.get('p_empirical') or 0:.4f}, the smallest possible with 500 decoys is 0.002). "
+                         f"{ow['copies_tested']} issued copies of this product were tested.")
+        if ow.get("dct_sim") is not None:
+            facts.append(f"Second, keyed DCT layer of copy #{ow['copy_id']}: similarity {ow['dct_sim']:.1f} "
+                         "(threshold 6).")
+        reg = ow.get("registration")
+        if reg:
+            facts.append(f"Our copy was registered at {reg['created_at']} UTC (log record #{reg['seq']}, "
+                         f"chain {'intact' if reg['chain_ok'] else 'BROKEN'}); a mark written over it "
+                         "can only be later.")
     own = d["details"].get("ownership")
     if own:
         for o in own:
-            parts = [f"v2 informed z = {o['informed_z']:.1f} (threshold 4)"]
+            parts = [f"informed z = {o['informed_z']:.1f} (threshold 4)"
+                     if o["informed_z"] is not None else "suspect could not be aligned"]
             if o["dct_sim"] is not None:
                 parts.append(f"DCT layer similarity = {o['dct_sim']:.1f} (threshold 6)")
             facts.append(f"Ownership check for copy #{o['copy_id']} ({o['label']}): "
@@ -350,7 +384,8 @@ def report(detection_id: int):
         return (f'<figure><img src="{e(url)}"><figcaption>{e(caption)}</figcaption></figure>'
                 if url else "")
 
-    copy_line = (f"<tr><th>Traced copy</th><td>#{d['copy_id']} — {e(d['copy_label'] or '')} "
+    copy_th = "Our copy (informed check)" if d["verdict"] == "watermark_overwritten" else "Traced copy"
+    copy_line = (f"<tr><th>{copy_th}</th><td>#{d['copy_id']} — {e(d['copy_label'] or '')} "
                  f"(issued {e(d['copy_created_at'] or '')})</td></tr>" if d["copy_id"] else
                  "<tr><th>Traced copy</th><td>not determined</td></tr>")
     status = ("Authorised location" if d["authorized"] else "NOT an authorised location")

@@ -31,7 +31,10 @@
 # originals must never read as one of our IDs.
 #
 # Uses the existing checkpoints only — no training.
-# Run: python tests/test_rewatermark.py [n_own] [n_abo]   (default 20 20)
+# Run: python tests/test_rewatermark.py [n_own] [n_abo] [checkpoint]   (default 20 20 v2)
+#      v3/v4 checkpoints are used as trained (strength 1.0); a keyed model (v4) adds
+#      "ours_again_other_key": the thief has our model file but not our key.
+#      Outputs for a non-default checkpoint get a suffix: output/rewatermark_<tag>_*.csv
 
 import sys, os, csv, time
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -47,11 +50,13 @@ from src import attacks, lsb
 from src.dct_watermark import embed as dct_embed
 from src.modern_attacks import _font
 
-V2 = "checkpoints/hidden_v2_best.pt"
+V2 = sys.argv[3] if len(sys.argv) > 3 else "checkpoints/hidden_v2_best.pt"
 V1 = "checkpoints/hidden_final.pt"
 N_OWN = int(sys.argv[1]) if len(sys.argv) > 1 else 20
 N_ABO = int(sys.argv[2]) if len(sys.argv) > 2 else 20
-STRENGTH, MASK = 0.7, 0.3
+DEFAULT = V2 == "checkpoints/hidden_v2_best.pt"
+STRENGTH, MASK = (0.7, 0.3) if DEFAULT or "v2" in os.path.basename(V2) else (1.0, None)
+TAG = "" if DEFAULT else "_" + os.path.basename(V2).replace("hidden_", "").replace("_best", "").replace(".pt", "")
 OUT = "results/rewatermark"
 os.makedirs(OUT, exist_ok=True)
 os.makedirs("output", exist_ok=True)
@@ -80,8 +85,15 @@ def w_v2_theirs(src, dst, i):
 
 
 def w_v2_theirs_full(src, dst, i):
-    # thief uses full strength to try to overpower ours
-    v2.embed_product(src, thief_id(i), dst, strength=1.0)
+    # thief uses full strength to try to overpower ours (1.5x for v3/v4, already at 1.0)
+    v2.embed_product(src, thief_id(i), dst, strength=1.0 if STRENGTH < 1 else 1.5 * STRENGTH,
+                     mask_floor=None)
+
+
+def w_v2_other_key(src, dst, i):
+    # keyed model only: same model file, the thief's own key
+    v2.embed_product(src, thief_id(i), dst, strength=STRENGTH, mask_floor=MASK,
+                     key=v2.other_key(20_000 + i))
 
 
 def w_visible_small(src, dst, i):
@@ -136,6 +148,9 @@ CASES = [
     ("layers3_v2_v2_v2",     "layers",       chain(w_v2_theirs, w_v2_theirs, w_v2_theirs)),
 ]
 V2_CASES = {"ours_v2_again", "ours_v2_again_full", "layers2_v2_v2", "layers3_v2_v2_v2"}
+if v2.key_dim:
+    CASES.insert(5, ("ours_again_other_key", "our model, other key", w_v2_other_key))
+    V2_CASES.add("ours_again_other_key")
 POST = [("clean", None, {}), ("jpeg_q70", attacks.jpeg_compress, {"quality": 70})]
 
 
@@ -166,7 +181,8 @@ for i, orig in enumerate(originals):
     ours[i] = wm
     pipe.register(i, orig, [1000 + i])
     # calibrated informed check (Part B2): z against 500 never-issued copies
-    checkers[i] = InformedChecker(v2, rgb(orig), 1000 + i, n_null=500)
+    checkers[i] = InformedChecker(v2, rgb(orig), 1000 + i, n_null=500,
+                                 embed_kwargs={"strength": STRENGTH, "mask_floor": MASK})
 
 
 def outcome(copy_id, i):
@@ -227,14 +243,14 @@ for case, group, fn in CASES:
         false += (cid is not None) or (res["copy_id"] is not None)
     control.append({"case": case, "false_positives": f"{false}/{len(originals)}"})
 
-with open("output/rewatermark_rows.csv", "w", newline="") as f:
+with open(f"output/rewatermark_rows{TAG}.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
     w.writeheader()
     w.writerows(rows)
 
 summary = []
 n = len(originals)
-print(f"\n{n} product photos ({N_OWN} own + {N_ABO} ABO), ours = v2 at {STRENGTH}/{MASK}\n")
+print(f"\n{n} product photos ({N_OWN} own + {N_ABO} ABO), ours = {V2} at {STRENGTH}/{MASK}\n")
 print(f"{'case':<22}{'post':<10}{'PSNR':>6}  {'blind: ours/theirs/none':>24}  {'pipeline: ours/theirs/none':>27}  informed z>=thr (median z)")
 for case, group, _ in CASES:
     for post, _, _ in POST:
@@ -258,15 +274,15 @@ for case, group, _ in CASES:
               f"{s['informed_hits']:>10}/{s['n']} (median z {s['informed_z_median']})"
               + (f"  (other id {s['blind_other']}/{s['pipe_other']})" if s['blind_other'] or s['pipe_other'] else ""))
 
-with open("output/rewatermark_summary.csv", "w", newline="") as f:
+with open(f"output/rewatermark_summary{TAG}.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
     w.writeheader()
     w.writerows(summary)
-with open("output/rewatermark_control.csv", "w", newline="") as f:
+with open(f"output/rewatermark_control{TAG}.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=["case", "false_positives"])
     w.writeheader()
     w.writerows(control)
 print("\nNegative control (second watermark on un-watermarked originals -> must read nothing):")
 for c in control:
     print(f"  {c['case']:<22} {c['false_positives']}")
-print("\nCSVs: output/rewatermark_summary.csv, rewatermark_rows.csv, rewatermark_control.csv")
+print(f"\nCSVs: output/rewatermark_summary{TAG}.csv, rewatermark_rows{TAG}.csv, rewatermark_control{TAG}.csv")
