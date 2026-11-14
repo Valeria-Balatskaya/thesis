@@ -763,3 +763,47 @@ false positives on 500 never-protected ABO photos. Table: `output/thesis/ablatio
 - HiDDeN v1 residual vs legacy embedding: PSNR 41.6 vs 25.0 dB (n = 10).
 - Every percentage in `output/thesis/*.md` has a 95% Wilson interval (`src/stats.py`).
 - `bash scripts/reproduce_all.sh` rebuilds all tables and figures.
+
+## Follow-up — mirror fix and 1,000-image false-positive check (1.2.3, 1.4)
+
+`tests/test_mirror_fp.py 30 1000` (v3): 90 protected photos (30 own + 30 ABO + 30 COCO). Negatives:
+1,167 never-protected images = 1,000 ABO negatives + the 90 clean originals of registered products +
+77 other own/ABO/COCO photos.
+
+`read_product(try_mirror=True)` reads the horizontally flipped image when every other attempt fails.
+It is off by default in the library, so earlier results are reproducible. **On in the app**
+(`app/guard.py`).
+
+| Mirrored copy | Blind | Blind + mirror retry | Full pipeline | Full + mirror retry |
+|---|---|---|---|---|
+| mirror | 0/90 [0–4.1%] | **90/90** [95.9–100%] | 83/90 | **90/90** |
+| mirror + JPEG q70 | 0/90 | 90/90 | 85/90 | 90/90 |
+| mirror + resize 0.5 | 0/90 | 90/90 | 85/90 | 90/90 |
+
+Wrong copy: 0 in every case.
+
+False positives on the 1,167 never-protected images:
+
+| | Without mirror retry | With mirror retry |
+|---|---|---|
+| Blind decoder returns any ID | 1/1,167 = 0.09% [0.02–0.48] | 1/1,167 (the same image) |
+| Pipeline claims a watermark | **0/1,167 [0–0.33%]** | **0/1,167** |
+
+- **The one blind false read is a genuine chance hit**, not a protected image: ABO `4ad940c7.jpg`,
+  768x768.
+  - Nothing on the direct read. On the 16:9 aspect-ratio retry, BCH corrected 6 errors (its limit
+    t = 6) and the 10-bit HMAC tag matched by chance → ID 44,251.
+  - That ID is not registered, so the pipeline returned `none`.
+- **Expected:** about 8.6e-6 per attempt x 9 attempts ≈ 7.7e-5 per image, so 1,167 images give
+  0.09 expected hits. Seeing one has a ~9% chance.
+  - Pooled with earlier runs, this is the first chance hit (0/2,064 test_hidden_v2_eval, 0/1,667
+    aspect-ratio test, 0/500 ablation).
+  - The empirical rate is consistent with theory.
+- **It matters at scale only if the random ID is registered.** With R of 2^20 IDs issued, a blind
+  chance hit names a registered copy with probability ~R / 2^20.
+- **Mitigations (proposed, not implemented):**
+  - Accept retry reads (aspect or mirror) only with ≤ 4 corrected errors: ~400x fewer chance hits
+    per retry, at a cost still to be measured.
+  - Or require alignment confirmation for retry hits.
+- The mirror retry doubles the attempts in theory (7.7e-5 → 1.5e-4 per image) but added no false
+  reads in 1,167 images.

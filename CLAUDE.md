@@ -260,6 +260,10 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
   0/90 FP. **App stays on v3**; guard.py no longer auto-loads v4 (TRACEMARK_CHECKPOINT to try it).
   TrustMark/WAM on top never block ownership (40/40). Outputs: output/v4_eval/, *_v4final.csv,
   overwrite_cost_summary_v3_v4final.csv (EXTERNAL=trustmark,wam), rewatermark BASELINES=1.
+- Mirror retry (`read_product(try_mirror=True)`, on in the app, off by default in the library):
+  mirrored copies blind 0/90 -> 90/90, full 83 -> 90/90 (tests/test_mirror_fp.py). False positives on
+  1,167 never-protected images: pipeline 0/1,167 both ways; blind decoder 1/1,167 (ABO 4ad940c7.jpg,
+  16:9 aspect retry, 6 BCH errors, unregistered ID 44251 = chance hit, ~9% likely at 7.7e-5/image).
 - Baselines (tests/test_baselines.py 30; 90 photos x 23 attacks = 2,070 each): blind / +RAV / clean FP.
   ours v3 67.6 / 97.5% (deployed 98.9%), dE 1.24, 0/90; TrustMark Q 72.0 / 87.0%, dE 0.41, 2/90;
   WAM 79.9 / 91.0%, dE 2.53 (visible), 0/90; at matched dE ~1.1: TrustMark 70.8 / 85.9, WAM 46.3 / 66.6.

@@ -89,7 +89,10 @@ def pipeline() -> DefencePipeline:
                 raise FileNotFoundError(
                     f"{CHECKPOINT} is missing. Train it with notebooks/train_hidden_v2.ipynb "
                     "and copy it into checkpoints/.")
-            p = DefencePipeline(HiddenV2Model(CHECKPOINT))
+            model = HiddenV2Model(CHECKPOINT)
+            # mirrored copies: blind 0/90 -> 90/90, 0/1,167 extra false reads (tests/test_mirror_fp.py)
+            model.try_mirror = True
+            p = DefencePipeline(model)
             for product in store.list_products():
                 copy_ids = [c["id"] for c in store.list_copies(product["id"])]
                 if Path(product["original_path"]).exists():

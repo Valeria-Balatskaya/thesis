@@ -109,8 +109,12 @@ class HiddenV2Model:
                         mask_floor, key=key, **mask_options)
         return {"product_id": product_id, "output_path": output_path}
 
+    # Off by default so earlier results stay reproducible; the app/tests switch it on
+    try_mirror: bool = False
+
     def read_product(self, image_path: str, try_aspects: bool = True,
-                     aspect_ratios: list | None = None, key: torch.Tensor | None = None) -> dict:
+                     aspect_ratios: list | None = None, key: torch.Tensor | None = None,
+                     try_mirror: bool | None = None) -> dict:
         """
         Blind detection. product_id is None when no valid watermark is found.
 
@@ -119,12 +123,36 @@ class HiddenV2Model:
         and try_aspects is set, the image is padded back to common original
         aspect ratios and read again. Each extra attempt is another chance of a
         false positive: worst case len(ASPECT_RATIOS) + 1 times the single-read rate.
+        try_mirror (default: self.try_mirror) repeats all of that on the
+        horizontally flipped image, doubling the number of attempts.
         """
         x = self._load(image_path)
         bits = self._decode_tensor(x, key)
-        result = {**decode_payload(bits), "bits": bits, "aspect": None}
-        if result["product_id"] is not None or not try_aspects:
+        result = {**decode_payload(bits), "bits": bits, "aspect": None, "mirrored": False}
+        if result["product_id"] is not None:
             return result
+        mirror = self.try_mirror if try_mirror is None else try_mirror
+        for flipped in ([False, True] if mirror else [False]):
+            xi = torch.flip(x, dims=[3]) if flipped else x
+            if flipped:
+                attempt = decode_payload(self._decode_tensor(xi, key))
+                if attempt["product_id"] is not None:
+                    return {**attempt, "bits": bits, "aspect": None, "mirrored": True}
+            if not try_aspects:
+                continue
+            _, _, h, w = xi.shape
+            for aw, ah in (ASPECT_RATIOS if aspect_ratios is None else aspect_ratios):
+                # Smallest canvas of that aspect ratio that contains the image
+                new_w, new_h = max(w, round(h * aw / ah)), max(h, round(w * ah / aw))
+                if (new_w, new_h) == (w, h):
+                    continue
+                canvas = torch.full((1, 3, new_h, new_w), 0.5, device=xi.device)
+                top, left = (new_h - h) // 2, (new_w - w) // 2
+                canvas[:, :, top:top + h, left:left + w] = xi
+                attempt = decode_payload(self._decode_tensor(canvas, key))
+                if attempt["product_id"] is not None:
+                    return {**attempt, "bits": bits, "aspect": f"{aw}:{ah}", "mirrored": flipped}
+        return result
         _, _, h, w = x.shape
         for aw, ah in (ASPECT_RATIOS if aspect_ratios is None else aspect_ratios):
             # Smallest canvas of that aspect ratio that contains the image
