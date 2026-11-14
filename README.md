@@ -43,11 +43,11 @@ On Windows, use `.venv\Scripts\activate`. Everything else is the same.
 | File | Model | Needed for |
 |---|---|---|
 | `hidden_v3_best.pt` | v3, product-photo model (default) | the app, all current tests |
-| `hidden_v4_best.pt` | v4, secret-key model | the app prefers it when present |
+| `hidden_v4_final.pt` | v4, key-conditioned (step 20,000; `hidden_v4_best.pt` = step 8,000) | comparison only: its key does not separate, and it is less robust than v3 |
 | `hidden_v2_best.pt` | v2 | history / comparison rows |
 | `hidden_final.pt` | v1 | oldest benchmarks, ablation (residual embedding) |
 
-The app takes the first file that exists **and loads**, in the order v4 → v3 → v2.
+The app takes the first file that exists **and loads**, in the order v3 → v2. v4 is used only when pinned.
 `TRACEMARK_CHECKPOINT=checkpoints/hidden_v3_best.pt` pins one model. Copies protected with one model
 can't be read by another.
 

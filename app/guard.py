@@ -33,8 +33,9 @@ except ImportError:
 # or broken v4 file falls back to v3. TRACEMARK_CHECKPOINT pins one file (e.g. to
 # keep reading copies protected with an older model: copies made with one model
 # cannot be read by another).
-CHECKPOINT_CANDIDATES = ("checkpoints/hidden_v4_best.pt", "checkpoints/hidden_v3_best.pt",
-                         "checkpoints/hidden_v2_best.pt")
+# v4 is not in the list: the trained v4 (step 8,000 and 20,000) does not separate keys
+# (wrong keys read our ID in ~64% of tries, Meeting 3). Use TRACEMARK_CHECKPOINT to try it.
+CHECKPOINT_CANDIDATES = ("checkpoints/hidden_v3_best.pt", "checkpoints/hidden_v2_best.pt")
 
 
 def pick_checkpoint(candidates=CHECKPOINT_CANDIDATES) -> str:

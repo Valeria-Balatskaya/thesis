@@ -233,13 +233,13 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
   Training: random keys, wrong-key loss (logits -> 0), other-key overwrite (prob 0.3).
   Deployment key = HMAC(WATERMARK_MODEL_KEY or WATERMARK_KEY, "model-key"). Notebook RUN='v4'
   (20,000 steps); evaluate with tests/test_v4_keys.py and test_v3_vs_v2.py 30 v4=... .
-  App prefers checkpoints/hidden_v4_best.pt. Not trained yet (waiting for the Colab run).
+  Trained and evaluated 2026-11-14 (see Final phase): key does not separate; app stays on v3.
 
 ## Final phase (2026-11-09, branch feature/final-phase, docs/supervisor_questions.md "Meeting 3")
 - `~/thesis/.venv` now has every requirement (+ AI, + baselines): use `.venv/bin/python`.
 - v4 tooling ready: `HiddenV2Model` takes `key=` on embed/read and `other_key(seed)`; tests have
   same-key and other-key thieves; `bash scripts/evaluate_v4.sh` runs the whole v4-vs-v3 evaluation.
-  App picks the first checkpoint that loads (v4 -> v3 -> v2); `TRACEMARK_CHECKPOINT` pins one.
+  App picks the first checkpoint that loads (v3 -> v2; v4 only via TRACEMARK_CHECKPOINT); `TRACEMARK_CHECKPOINT` pins one.
 - New verdict `watermark_overwritten` (`defence.mark_overwritten`, app scan + report): fingerprint_only
   + informed z >= 4 (or DCT layer) for one issued copy. tests/test_overwritten_verdict.py (v3, 40
   photos, 2 copies each): our copy identified 40/40 (same-strength thief; 29 as overwritten), 33/40
@@ -252,6 +252,14 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
   scripts/reproduce_all.sh (~13-15 h) + scripts/thesis_tables.py -> output/thesis/*.md, thesis/figures/.
 - thesis/: outline.md (objective mapping INFERRED, user must confirm wording), references.bib (36,
   recent ones verified online), uml/*.puml (render: brew install plantuml; scripts/render_uml.sh).
+- **v4 evaluated (2026-11-14)**: trained 20,000 steps; final = checkpoints/hidden_v4_final.pt (step 8,000
+  = hidden_v4_best.pt). **Key does not work**: wrong keys read our ID 75.4% of 8,000 tries (step 8,000:
+  63.5%); cause: key only scales the carrier by (0, 2), never flips its sign. **But more overwrite-
+  resistant** (overwrite augmentation): same-key thief ownership 1.5x/2x/3x/4x v4 39/34/27/10 of 40 vs
+  v3 34/13/3/2. Normal robustness lower: full 96.3% vs 98.9% (ABO 92.5 vs 97.7), dE equal or lower,
+  0/90 FP. **App stays on v3**; guard.py no longer auto-loads v4 (TRACEMARK_CHECKPOINT to try it).
+  TrustMark/WAM on top never block ownership (40/40). Outputs: output/v4_eval/, *_v4final.csv,
+  overwrite_cost_summary_v3_v4final.csv (EXTERNAL=trustmark,wam), rewatermark BASELINES=1.
 - Baselines (tests/test_baselines.py 30; 90 photos x 23 attacks = 2,070 each): blind / +RAV / clean FP.
   ours v3 67.6 / 97.5% (deployed 98.9%), dE 1.24, 0/90; TrustMark Q 72.0 / 87.0%, dE 0.41, 2/90;
   WAM 79.9 / 91.0%, dE 2.53 (visible), 0/90; at matched dE ~1.1: TrustMark 70.8 / 85.9, WAM 46.3 / 66.6.
@@ -283,7 +291,7 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
 10. ✅ Meeting 2 prep: v3 data/options/notebook, texture masks, DCT layer, calibrated informed
    check, registration log, copy-attack check, overhead + parameter study
 11. ✅ v3 trained and evaluated (tests/test_v3_vs_v2.py); app uses it
-12. v4 secret-key model: code ready, user trains in Colab (RUN='v4'), then test_v4_keys
+12. ✅ v4 trained + evaluated: key fails (negative result), better overwrite resistance, app stays v3
 13. Final phase (Meeting 3): v4 eval, overwritten verdict ✅, real-world tooling ✅ (captures: user),
    baselines + ablation ✅, reproduce_all ✅, thesis scaffolding ✅
 14. **Next:** real-world capture dataset (own screenshots / phone photos / messenger), comparison

@@ -491,17 +491,118 @@ Every percentage now has n and a 95% Wilson interval (`src/stats.py`). Objective
 
 ## Part 1 — v4 secret-key model (1.2.3, 1.2.5)
 
-Waiting for the Colab run. Everything to evaluate it is ready and smoke-tested with a stand-in
-checkpoint (v3 weights + untrained key layers):
-- `tests/test_v4_keys.py`: wrong keys, other-key overwrite, same-key overwrite.
-- `tests/test_v3_vs_v2.py 30 v4=...`: now also a thief with *another key*.
-- `tests/test_overwrite_cost.py 20 20 v4=...`: v4 and v4+DCT, thief same key / other key, 1–4×.
-- `tests/test_rewatermark.py 20 20 <ckpt>` and `tests/test_in_the_wild.py ... <ckpt>`: take any
-  checkpoint.
-- `bash scripts/evaluate_v4.sh` runs all of them in sequence (~3–4 h).
+v4 trained in Colab for all 20,000 steps (warm start from v3).
+- The step-8,000 file `hidden_v4_best.pt` was saved as "best" only because the best-checkpoint score
+  subtracts wrong-key decodability, and that rose during training.
+- The final model is `checkpoints/hidden_v4_final.pt` (Drive: `hidden_v2_latest.pt` at step 20,000).
+- Colab validation at step 20,000: JPEG 82%, levels 95%, combo 43%, PSNR 41.6 dB, other-key
+  overwrite 78%, wrong key 81%.
 
-The app now uses a checkpoint only if it **loads**: a missing or broken `hidden_v4_best.pt` falls back
-to v3. `TRACEMARK_CHECKPOINT` pins one model, so copies already protected with v3 stay readable.
+### Result 1 — the secret key does not work (negative result)
+
+`tests/test_v4_keys.py`, 40 photos (20 own + 20 ABO) x 200 random wrong keys = 8,000 tries:
+
+| Checkpoint | Our key reads ours | Wrong key reads OUR ID (should be ~0%) |
+|---|---|---|
+| step 8,000, clean | 36/40 | 63.5% [62.5–64.6] (5,083/8,000) |
+| step 20,000, clean | 38/40 | **75.4% [74.5–76.3] (6,033/8,000)** |
+| step 20,000, JPEG q70 | 38/40 | 71.2% [70.2–72.2] (5,697/8,000) |
+
+The decoder reads our ID with almost any key. The key layer added no separation, and separation got
+worse with training (Colab validation 62% → 81%).
+
+Likely reasons:
+1. **The key only scales the carrier, never flips it.** The encoder multiplies the per-bit carrier
+   by `1 + tanh(W·key)`, a factor in (0, 2) (`src/hidden_v2.py`). Each bit keeps the same polarity
+   pattern whatever the key, so a decoder with any key can correlate against it.
+2. **The decoder can ignore the key.** It was warm-started from v3, which already decodes without a
+   key. The key FiLM layers start at zero, so the easiest solution is to leave them near identity.
+3. **The penalty is too weak.** The wrong-key loss (weight 0.5, target p = 0.5) works against the
+   main decoding loss. Robustness and key separation compete, and robustness won.
+
+Fix, as future work (needs training, so out of scope now):
+- Make the key change the sign of the carrier: a fixed key-seeded ±1 spread-spectrum mask or a
+  bit-to-carrier permutation, as in classical keyed spread spectrum (Cox et al. 1997), instead of
+  a learned positive scale.
+- Train from scratch, or with the unkeyed decoder path frozen out, with a stronger wrong-key weight.
+
+Note: cryptographic separation already exists at the payload level. The HMAC tag and XOR mask use
+the server key, so a thief with another server key cannot forge IDs we accept.
+
+### Result 2 — v4 is harder to overwrite anyway
+
+`tests/test_overwrite_cost.py`, 40 photos (20 own + 20 ABO). The thief writes over our published copy;
+"ownership" = calibrated informed check z ≥ 4. Full table: `output/thesis/overwrite_cost.md`.
+
+| Thief | Strength (thief's ΔE) | v3 ownership | v4 ownership | Thief's ID read v3 / v4 |
+|---|---|---|---|---|
+| same model, same key | 1× (1.7–1.8) | 40/40 | 39/40 | 8/40 / 3/40 |
+| | 1.5× (2.1–2.2) | 34/40 | **39/40** | 33/40 / 23/40 |
+| | 2× (2.5–2.7) | 13/40 | **34/40** | 36/40 / 33/40 |
+| | 3× (3.4–3.6) | 3/40 | **27/40** | 39/40 / 35/40 |
+| | 4× (4.2–4.4) | 2/40 | **10/40** | 39/40 / 35/40 |
+| same model, other key (v4 only) | 1× / 2× / 4× | – | 40 / 37 / 30 of 40 | – / 16 / 35 / 37 of 40 |
+
+- The same holds in `test_v3_vs_v2.py` (60 photos): at 1.5x, ownership is v3 51/60 vs v4 59/60.
+- **Why v4 is harder to overwrite even though the key fails:** it was trained with 30% other-key
+  overwrites. That teaches the encoder to write a mark that survives a second mark from the same
+  network. The key is not what does it.
+- Blind, our ID survives an other-key thief at 1x in 26/40 photos (v3 same model: 6/40). But that
+  only shows a v4 copy without our key overwrites less.
+
+### Result 3 — normal quality: v4 is slightly less robust
+
+`tests/test_v3_vs_v2.py 30` (90 photos x 23 attacks = 2,070 per model):
+
+| | v3 | v4 final |
+|---|---|---|
+| ΔE (own / ABO / COCO) | 1.27 / 1.10 / 1.35 | 1.03 / 1.06 / 1.26 (slightly less visible) |
+| ΔE background (own / ABO / COCO) | 0.79 / 0.19 / 0.60 | 0.57 / 0.17 / 0.54 |
+| PSNR (own / ABO / COCO) | 41.9 / 41.7 / 42.3 | 40.7 / 41.2 / 41.7 |
+| Blind, all sets | 67.6% [65.6–69.6] | 68.7% [66.7–70.7] |
+| **Full pipeline, all sets** | **98.9% [98.3–99.3]** | **96.3% [95.4–97.1]** |
+| Full pipeline, ABO | 97.7% [96.3–98.6] | 92.5% [90.3–94.2] |
+| 50% off-centre crop | 80/90 | 63/90 |
+| Native screenshot / screen photo (blind) | 39 / 34 of 90 | 66 / 62 of 90 |
+| False positives, 90 clean originals | 0/90 | 0/90 |
+
+### Re-watermarking with other systems, incl. TrustMark and WAM
+
+`tests/test_rewatermark.py`, 40 photos, `BASELINES=1`. Our ID blind / informed ownership, clean:
+
+| On top of ours | v3 | v4 final | Thief's own system reads its ID |
+|---|---|---|---|
+| TrustMark (ΔE 1.1–1.2) | 40/40 / 40/40 | 38/40 / 40/40 | 40/40 |
+| WAM (ΔE 2.4–2.5) | 40/40 / 40/40 | 37/40 / 40/40 | 40/40 (34/40 after JPEG) |
+| TrustMark then WAM (ΔE 2.5–2.6) | 40/40 / 40/40 | 36/40 / 40/40 | WAM 40/40, TrustMark 39/40 * |
+| DCT, LSB, HiDDeN v1, visible marks | 40/40 / 40/40 | 37–39/40 / 40/40 | – |
+| our model again, 1.5x | 2/40 / 34/40 | 1/40 / **39/40** | – |
+| our model 3 times (stacked) | 2/40 / 24/40 | 1/40 / **37/40** | – |
+
+- Industry watermarks do not remove ours. Both marks coexist, and both are readable.
+- So the upload pre-check plus the registration log are what decide priority, not "whose mark reads".
+- Controls (the same marks on clean originals): 0/40 false reads for every case, both models.
+- (*) The test read the second layer with the wrong ID (0/40). Fixed, and re-read on the saved v3
+  images: WAM 40/40 and TrustMark under it 39/40, clean and after JPEG q70. The v4 images were
+  overwritten before the fix; their main columns are unaffected.
+
+### Decision: the app stays on v3
+
+Criteria: at least as robust, not more visible, 0 false positives, better against overwriting.
+
+| Criterion | v4 final vs v3 | Met? |
+|---|---|---|
+| At least as robust | 96.3% vs 98.9% full pipeline (CIs don't overlap); ABO 92.5 vs 97.7; 50% crop 63 vs 80 | **no** |
+| Not more visible | ΔE equal or lower on every set | yes |
+| 0 false positives | 0/90 | yes |
+| Better against overwriting | ownership at 2x 34 vs 13/40, at 3x 27 vs 3/40 | yes |
+| (key works) | wrong key reads our ID 75% | no |
+
+- **The app stays on v3.** `app/guard.py` no longer auto-loads any v4 file;
+  `TRACEMARK_CHECKPOINT=checkpoints/hidden_v4_final.pt` still tries it.
+- **For the thesis:** v4 shows that training with overwrite augmentation buys overwrite resistance,
+  at a cost of ~2.6 pp normal robustness (5 pp on marketplace photos). Key conditioning by
+  positive carrier scaling does not create key separation.
 
 ## Part 2 — overwriting
 
@@ -541,14 +642,14 @@ product (A published, B never published):
 
 ### 2.2 Overwrite-resistance table
 
-`tests/test_overwrite_cost.py` now covers:
-- v2, v3, v3+DCT, v4, v4+DCT;
-- thief with the same key or another key;
-- the thief's ID read with the thief's own key;
-- ownership with CIs;
-- a summary CSV for `scripts/thesis_tables.py`.
+Done: `output/thesis/overwrite_cost.md` (from `output/overwrite_cost_summary_v3_v4final.csv`).
+- Models v3 and v4 final.
+- Thieves: same model (same key), other key, TrustMark and WAM, each at 1–4x.
+- Columns: thief's ΔE, ΔE background, PSNR, our ID read blind, ownership proven, thief's ID read.
 
-**Runs when v4 arrives**, so all models are measured in one run.
+Results: Part 1, Result 2.
+- TrustMark and WAM on top never prevent ownership (v3 40/40 at every strength; WAM 4x 38/40, ΔE 7.5).
+- v2 and v3+DCT rows are from the earlier run (Meeting 2 / CLAUDE.md) and were not re-run.
 
 ### 2.3 Spatial redundancy — design note
 

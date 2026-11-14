@@ -146,7 +146,7 @@ for sysname, (ckpt, kw) in SYSTEMS.items():
     print(f"{sysname}: overwrite done ({time.time() - t0:.0f}s)", flush=True)
 
 for name, rows in [("quality", quality), ("robustness", robust), ("overwrite", overwrite)]:
-    with open(f"output/v3_vs_v2_{name}.csv", "w", newline="") as fh:
+    with open(f"output/v3_vs_v2_{name}{os.environ.get('TAG', '')}.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
@@ -190,4 +190,4 @@ for s in SYSTEMS:
             print(f"  {s} {name:<14} {post:<9} {c('ours'):>3}/{c('theirs')}/{c('nothing')} of {len(sub)}   "
                   f"informed {frac_ci(sum(r['informed_hit'] for r in sub), len(sub))} "
                   f"(median z {np.median([r['informed_z'] for r in sub]):.2f})")
-print(f"\nCSVs: output/v3_vs_v2_*.csv ({time.time() - t0:.0f}s)")
+print(f"\nCSVs: output/v3_vs_v2_*{os.environ.get('TAG', '')}.csv ({time.time() - t0:.0f}s)")

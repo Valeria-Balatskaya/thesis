@@ -45,7 +45,7 @@ from PIL import Image, ImageDraw
 from src.hidden_v2_inference import HiddenV2Model
 from src.hidden_inference import HiddenModel
 from src.defence import DefencePipeline, InformedChecker, Z_THRESHOLD
-from src.metrics import compute
+from src.metrics import compute, visibility
 from src import attacks, lsb
 from src.dct_watermark import embed as dct_embed
 from src.modern_attacks import _font
@@ -147,6 +147,16 @@ CASES = [
     ("layers2_v2_v2",        "layers",       chain(w_v2_theirs, w_v2_theirs)),
     ("layers3_v2_v2_v2",     "layers",       chain(w_v2_theirs, w_v2_theirs, w_v2_theirs)),
 ]
+# industry watermarks on top of ours (BASELINES=1): TrustMark, Watermark Anything, both
+EXT = {}
+if os.environ.get("BASELINES") == "1":
+    from src.baselines import TrustMarkBaseline, WAMBaseline
+    EXT = {"trustmark": TrustMarkBaseline(), "wam": WAMBaseline()}
+    w_tm = lambda src, dst, i: EXT["trustmark"].embed(src, dst, thief_id(i))
+    w_wam = lambda src, dst, i: EXT["wam"].embed(src, dst, thief_id(i))
+    CASES += [("other_trustmark", "industry", w_tm), ("other_wam", "industry", w_wam),
+              ("layers2_trustmark_wam", "industry", chain(w_tm, w_wam))]
+EXT_READER = {"other_trustmark": "trustmark", "other_wam": "wam", "layers2_trustmark_wam": "wam"}
 V2_CASES = {"ours_v2_again", "ours_v2_again_full", "layers2_v2_v2", "layers3_v2_v2_v2"}
 if v2.key_dim:
     CASES.insert(5, ("ours_again_other_key", "our model, other key", w_v2_other_key))
@@ -202,6 +212,7 @@ for case, group, fn in CASES:
         stacked = f"{OUT}/{case}_{i:03d}.png"
         fn(ours[i], stacked, i)
         q = compute(ours[i], stacked)
+        dE = visibility(originals[i], stacked)["dE_mean"]      # thief's version vs the clean original
         # A thief who re-protects in TraceMark registers our published copy as
         # their "original", with their own copy ID(s)
         thief_pid = 10_000 + i
@@ -218,13 +229,19 @@ for case, group, fn in CASES:
             blind = v2.read_product(sus)["product_id"]
             res = pipe.analyse(sus)
             inf = checkers[i].test(rgb(sus))
+            ext_name = EXT_READER.get(case)
+            # chain() gives layer k the ID i + 1000 k; WAM is layer 1 in layers2_trustmark_wam
+            ext_i = i + 1000 if case.startswith("layers2_") else i
+            thief_read = (int(bool(EXT[ext_name].read_path(sus, thief_id(ext_i))["ok"]))
+                          if ext_name in EXT else "")
             rows.append({"case": case, "group": group, "image": i, "post": post,
-                         "psnr_vs_ours": q["PSNR_dB"],
+                         "psnr_vs_ours": q["PSNR_dB"], "dE_vs_original": dE,
                          "blind": outcome(blind, i),
                          "pipeline": outcome(res["copy_id"], i),
                          "pipeline_verdict": res["verdict"],
                          "informed_z": inf["z"],
-                         "informed_hit": int(inf["z"] >= Z_THRESHOLD)})
+                         "informed_hit": int(inf["z"] >= Z_THRESHOLD),
+                         "thief_system_read": thief_read})
         if case in V2_CASES:
             pipe.forget(thief_pid)
     print(f"{case:<22} done ({time.time() - t0:.0f}s)", flush=True)
@@ -266,12 +283,17 @@ for case, group, _ in CASES:
              "pipe_fingerprint_only": sum(r["pipeline_verdict"] == "fingerprint_only" for r in sub),
              "informed_hits": sum(r["informed_hit"] for r in sub),
              "informed_z_median": round(float(np.median([r["informed_z"] for r in sub])), 2),
-             "informed_z_min": round(float(min(r["informed_z"] for r in sub)), 2)}
+             "informed_z_min": round(float(min(r["informed_z"] for r in sub)), 2),
+             "dE_vs_original": round(float(np.mean([r["dE_vs_original"] for r in sub])), 2),
+             "thief_system_read": (sum(r["thief_system_read"] for r in sub)
+                                   if sub[0]["thief_system_read"] != "" else "")}
         summary.append(s)
         print(f"{case:<22}{post:<10}{s['psnr_vs_ours']:>6}  "
               f"{s['blind_ours']:>8}/{s['blind_theirs']}/{s['blind_nothing']:<10}"
               f"{s['pipe_ours']:>12}/{s['pipe_theirs']}/{s['pipe_nothing']:<6}"
               f"{s['informed_hits']:>10}/{s['n']} (median z {s['informed_z_median']})"
+              + f"  dE {s['dE_vs_original']}"
+              + (f"  thief's system reads its ID {s['thief_system_read']}/{s['n']}" if s['thief_system_read'] != "" else "")
               + (f"  (other id {s['blind_other']}/{s['pipe_other']})" if s['blind_other'] or s['pipe_other'] else ""))
 
 with open(f"output/rewatermark_summary{TAG}.csv", "w", newline="") as f:

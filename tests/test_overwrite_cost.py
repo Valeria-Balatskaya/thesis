@@ -16,6 +16,9 @@
 #   same_key   an insider with our model AND our key (what the upload pre-check stops)
 #   other_key  someone with our model file but not our key (leaked / open-sourced model)
 # "thief's ID read" = the thief's ID decoded with the THIEF's key (their own claim).
+# Industry watermarks as thieves (EXTERNAL=trustmark,wam): the thief puts TrustMark or
+# Watermark Anything on top of our copy at 1-4x that system's default strength; "thief's ID
+# read" is then that system reading its own message.
 # Rule of thumb for dE: < 1 not noticeable, 1-2 on close inspection, > 2 at a glance.
 # Percentages come with 95% Wilson intervals (src/stats.py).
 #
@@ -48,9 +51,11 @@ for arg in sys.argv[3:]:
     SYSTEMS[name + "+dct"] = (ckpt, {"strength": 1.0, "mask_floor": None}, True)
 if os.environ.get("ONLY"):                      # e.g. ONLY=v3,v4 for a quick run
     SYSTEMS = {k: v for k, v in SYSTEMS.items() if k in os.environ["ONLY"].split(",")}
+EXTERNAL = [x for x in os.environ.get("EXTERNAL", "").split(",") if x]
 OUT = "results/overwrite_cost"
 os.makedirs(OUT, exist_ok=True)
 os.makedirs("output", exist_ok=True)
+TAG = os.environ.get("TAG", "")                 # output suffix, e.g. TAG=_v4final
 
 
 def rgb(p):
@@ -71,9 +76,14 @@ for tag, folder, n in [("own", "data/products_png", N_OWN), ("abo", "data/abo_sa
 rows = []
 t0 = time.time()
 models = {}
+external = {}
+if EXTERNAL:
+    from src.baselines import TrustMarkBaseline, WAMBaseline
+    for name in EXTERNAL:
+        external[name] = {"trustmark": TrustMarkBaseline, "wam": WAMBaseline}[name]()
 for sysname, (ckpt, kw, use_dct) in SYSTEMS.items():
     model = models.setdefault(ckpt, HiddenV2Model(ckpt))
-    thieves = ["same_key", "other_key"] if model.key_dim else ["same_model"]
+    thieves = (["same_key", "other_key"] if model.key_dim else ["same_model"]) + list(external)
     for i, (tag, orig) in enumerate(images):
         cid = 1000 + i
         pub = f"{OUT}/pub.png"
@@ -87,11 +97,18 @@ for sysname, (ckpt, kw, use_dct) in SYSTEMS.items():
             tkey = model.other_key(10_000 + i) if thief_kind == "other_key" else None
             for lvl in LEVELS:
                 thief = f"{OUT}/thief.png"
-                model.embed_product(pub, 500_000 + i, thief, strength=kw["strength"] * lvl,
-                                    mask_floor=kw["mask_floor"], key=tkey)
+                if thief_kind in external:
+                    ext = external[thief_kind]
+                    ext.embed(pub, thief, 500_000 + i, strength=ext.default_strength * lvl)
+                else:
+                    model.embed_product(pub, 500_000 + i, thief, strength=kw["strength"] * lvl,
+                                        mask_floor=kw["mask_floor"], key=tkey)
                 q, v = compute(orig, thief), visibility(orig, thief)
                 got = model.read_product(thief)["product_id"]
-                theirs = model.read_product(thief, key=tkey)["product_id"] == 500_000 + i
+                if thief_kind in external:
+                    theirs = bool(external[thief_kind].read_path(thief, 500_000 + i)["ok"])
+                else:
+                    theirs = model.read_product(thief, key=tkey)["product_id"] == 500_000 + i
                 s_ = rgb(thief)
                 z = checker.test(s_)["z"]
                 dct_hit = bool(use_dct and dct_layer.detect(s_, ref, cid, n_null=200)["detected"])
@@ -105,13 +122,13 @@ for sysname, (ckpt, kw, use_dct) in SYSTEMS.items():
                              "owned": int(z >= Z_THRESHOLD or dct_hit)})
     print(f"{sysname} done ({time.time() - t0:.0f}s)", flush=True)
 
-with open("output/overwrite_cost.csv", "w", newline="") as f:
+with open(f"output/overwrite_cost{TAG}.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
     w.writeheader()
     w.writerows(rows)
 
 n = len(images)
-print(f"\n{n} photos ({N_OWN} own + {N_ABO} ABO); thief = same model file, random ID\n")
+print(f"\n{n} photos ({N_OWN} own + {N_ABO} ABO); thief = same model file (or EXTERNAL system), random ID\n")
 print(f"{'system':<9}{'thief':<11}{'x':>4}{'dE':>6}{'dE flat':>8}{'PSNR':>6}   blind ours/theirs/none"
       f"   {'ownership proven':<18}  thief's ID read")
 summary = []
@@ -136,7 +153,7 @@ for sysname in SYSTEMS:
 for sysname in SYSTEMS:
     sub = [r["ours_dE"] for r in rows if r["system"] == sysname and r["level"] == 1.0]
     print(f"  our own published copy, {sysname}: dE {np.mean(sub):.2f}")
-with open("output/overwrite_cost_summary.csv", "w", newline="") as f:
+with open(f"output/overwrite_cost_summary{TAG}.csv", "w", newline="") as f:
     w = csv.DictWriter(f, fieldnames=list(summary[0].keys()))
     w.writeheader()
     w.writerows(summary)
@@ -165,5 +182,5 @@ ax.grid(color="#e4e3df")
 for side in ("top", "right"):
     ax.spines[side].set_visible(False)
 fig.tight_layout()
-fig.savefig("output/overwrite_cost.png", dpi=200)
-print(f"\nCSV: output/overwrite_cost.csv, chart: output/overwrite_cost.png ({time.time() - t0:.0f}s)")
+fig.savefig(f"output/overwrite_cost{TAG}.png", dpi=200)
+print(f"\nCSV: output/overwrite_cost{TAG}.csv, chart: output/overwrite_cost{TAG}.png ({time.time() - t0:.0f}s)")

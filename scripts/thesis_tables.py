@@ -79,18 +79,22 @@ else:
     print("skip visibility/robustness: run tests/test_v3_vs_v2.py")
 
 # ─── overwrite cost (Part 2.2) ────────────────────────────────────
-ow = load("output/overwrite_cost_summary.csv")
+# newest run first: v3 vs v4 final with TrustMark / WAM thieves (TAG=_v3_v4final)
+OW = next((p for p in ("output/overwrite_cost_summary_v3_v4final.csv", "output/overwrite_cost_summary.csv")
+           if os.path.exists(p)), "output/overwrite_cost_summary.csv")
+OW_FIG = OW.replace("_summary", "").replace(".csv", ".png")
+ow = load(OW)
 if ow:
-    lines = ["| Model | Thief | Thief strength | Thief's damage ΔE | ΔE background | PSNR (dB) | Ownership proven | Thief's ID read |",
-             "|---|---|---|---|---|---|---|---|"]
+    lines = ["| Model | Thief | Thief strength | Thief's damage ΔE | ΔE background | PSNR (dB) | Our ID read blind | Ownership proven | Thief's ID read |",
+             "|---|---|---|---|---|---|---|---|---|"]
     for x in ow:
         n = int(x["n"])
         lines.append(f"| {x['system']} | {x['thief'].replace('_', ' ')} | {float(x['level']):g}× | "
                      f"{num(x['thief_dE']):.2f} | {num(x['thief_dE_flat']) or float('nan'):.2f} | {num(x['thief_psnr']):.1f} | "
-                     f"{frac_ci(int(x['owned']), n)} | {frac_ci(int(x['thief_id_read']), n)} |")
+                     f"{frac_ci(int(x['ours']), n)} | {frac_ci(int(x['owned']), n)} | {frac_ci(int(x['thief_id_read']), n)} |")
     lines += ["", "Ownership proven = calibrated informed check z ≥ 4 (500 never-issued copies) or the keyed DCT "
               "layer detected. Thief's ID read with the thief's own key. ΔE > 2 ≈ visible at a glance."]
-    write("overwrite_cost", "Removing our mark by overwriting costs visible damage", "output/overwrite_cost_summary.csv", lines)
+    write("overwrite_cost", "Removing our mark by overwriting costs visible damage", OW, lines)
 else:
     print("skip overwrite table: run tests/test_overwrite_cost.py (it now writes overwrite_cost_summary.csv)")
 
@@ -150,7 +154,7 @@ if a:
         fp = pct_ci(int(float(x["false_positives"])), int(x["n_negatives"]), 2) if num(x["false_positives"]) is not None else "–"
         f = lambda k, d: f"{num(x[k]):.{d}f}" if num(x[k]) is not None else "–"
         lines.append(f"| {x['configuration']} | {tr} | {f('psnr', 1)} | {f('dE', 2)} | {f('dE_bg', 2)} | {fp} |")
-    ow = load("output/overwrite_cost_summary.csv")
+    ow = load(OW)
     if ow:
         lines += ["", "Components that only matter against overwriting (from test_overwrite_cost, ownership proven):", "",
                   "| Thief strength | v3 | v3 + DCT layer (− DCT: v3) | v4 other key (− key: v3) |", "|---|---|---|---|"]
@@ -175,7 +179,7 @@ else:
     print("skip real world: collect captures (docs/real_world_protocol.md), run tests/test_real_world.py")
 
 # ─── figures ──────────────────────────────────────────────────────
-FIGS = {"output/overwrite_cost.png": "overwrite_cost.png", "output/baselines/baselines.png": "baselines.png",
+FIGS = {OW_FIG: "overwrite_cost.png", "output/baselines/baselines.png": "baselines.png",
         "output/real_world/real_world.png": "real_world.png", "output/v2_vs_v3_signal.png": "v2_vs_v3_signal.png",
         "output/parameter_study_tradeoff.png": "parameter_study_tradeoff.png",
         "output/overhead_retrieval.png": "overhead_retrieval.png"}
