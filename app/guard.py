@@ -15,7 +15,7 @@ from PIL import Image
 
 from app import registry_log, store
 from src import attacks, ecommerce_attacks as ea, modern_attacks as ma
-from src.defence import DefencePipeline, ownership_check, mark_overwritten
+from src.defence import DefencePipeline, ownership_check, mark_overwritten, OursPeeler, order_proof, fingerprint, match, align
 from src import dct_layer
 from src.hidden_v2_inference import HiddenV2Model
 from src.metrics import compute as quality
@@ -77,6 +77,29 @@ DCT_LAYER = os.environ.get("TRACEMARK_DCT_LAYER", "0") == "1"
 for sub in ("originals", "copies", "diff", "lab", "scans", "crawl", "aligned", "demo"):
     (DATA / sub).mkdir(parents=True, exist_ok=True)
 
+# Peel-off (src/defence.py, tests/test_peel_off.py): when another watermark sits on top of
+# ours, regenerate it, subtract it and read ours again. Systems it can peel:
+# TRACEMARK_PEEL=ours,trustmark,wam,videoseal (default; the baselines only if their
+# optional packages are installed, see requirements-baselines.txt). "" switches it off.
+PEEL = [x for x in os.environ.get("TRACEMARK_PEEL", "ours,trustmark,wam,videoseal").split(",") if x]
+
+
+def _peelers(model) -> list:
+    out = []
+    for name in PEEL:
+        try:
+            if name == "ours":
+                out.append(OursPeeler(model, {"strength": STRENGTH, "mask_floor": MASK_FLOOR}))
+            else:
+                from src import baselines
+                cls = {"trustmark": baselines.TrustMarkBaseline, "wam": baselines.WAMBaseline,
+                       "videoseal": baselines.VideoSealBaseline}[name]
+                out.append(cls())
+        except Exception as exc:                       # optional package missing
+            print(f"[guard] peel-off without {name}: {exc}")
+    return out
+
+
 _lock = threading.Lock()              # the model and registry are shared across request threads
 _pipeline: DefencePipeline | None = None
 
@@ -92,7 +115,10 @@ def pipeline() -> DefencePipeline:
             model = HiddenV2Model(CHECKPOINT)
             # mirrored copies: blind 0/90 -> 90/90, 0/1,167 extra false reads (tests/test_mirror_fp.py)
             model.try_mirror = True
-            p = DefencePipeline(model)
+            # retry reads need <= 4 corrected errors or alignment confirmation:
+            # full pipeline 2053/2070 either way, blind false IDs 1/1,167 -> 0 (tests/test_retry_rule.py)
+            model.retry_max_errors = 4
+            p =DefencePipeline(model, _peelers(model))
             for product in store.list_products():
                 copy_ids = [c["id"] for c in store.list_copies(product["id"])]
                 if Path(product["original_path"]).exists():
@@ -216,7 +242,7 @@ def precheck(image_path: str, seller_id: int) -> dict | None:
     p = pipeline()
     with _lock:
         res = p.analyse(image_path)
-    if res["verdict"] in ("watermark", "watermark_aligned", "fingerprint_only"):
+    if res["verdict"] in ("watermark", "watermark_aligned", "watermark_peeled", "fingerprint_only"):
         product = store.get_product(res["product_id"])
         return {"reason": "registered_copy" if res["copy_id"] is not None else "same_picture",
                 "verdict": res["verdict"], "product_id": product["id"],
@@ -301,6 +327,40 @@ def is_authorized(product_id: int, page_url: str | None) -> bool:
     return False
 
 
+def order_evidence(res: dict, suspect_path: str, p: DefencePipeline | None = None) -> list[dict] | None:
+    """
+    Order proof for every foreign mark peel-off found on top of our copy: rebuild "thief
+    marked our copy" and "thief marked the clean original" and see which one the suspect
+    is (calibrated against 25 never-issued copies; tests/test_order_proof.py).
+    Callers holding _lock must pass p (pipeline() takes _lock itself).
+    """
+    p = p or pipeline()
+    found = [f for st in res["stages"] if st["stage"].startswith("peel") for f in (st.get("found") or [])]
+    if not found:
+        return None
+    product = store.get_product(res["product_id"])
+    original = np.asarray(Image.open(product["original_path"]).convert("RGB"))
+    suspect = res["aligned"]
+    if suspect is None:
+        suspect = np.asarray(Image.open(suspect_path).convert("RGB"))
+        if suspect.shape != original.shape:
+            m = match(fingerprint(suspect), fingerprint(original))
+            if m is None:
+                return None
+            suspect = align(suspect, m["H"], original)[0]
+    peelers = {pl.name: pl for pl in p.peelers}
+    out = []
+    for f in found:
+        pl = peelers.get(f["system"])
+        msg = pl.foreign_read(suspect) if pl else None
+        if msg is None:
+            continue
+        r = order_proof(p.model, suspect, original, res["copy_id"], pl, msg,
+                        embed_kwargs={"strength": STRENGTH, "mask_floor": MASK_FLOOR}, n_decoys=25)
+        out.append(r)
+    return out or None
+
+
 def analyse(suspect_path: str, page_url: str | None = None, image_url: str | None = None,
             record: bool = False) -> dict:
     """Run the staged pipeline on a suspect file and describe the result for the UI."""
@@ -313,7 +373,8 @@ def analyse(suspect_path: str, page_url: str | None = None, image_url: str | Non
     out = {"verdict": res["verdict"], "stages": res["stages"], "seconds": elapsed,
            "suspect_url": media_url(suspect_path), "product": None, "copy": None,
            "aligned_url": None, "bits": None, "expected_bits": None,
-           "authorized": None, "detection_id": None, "ownership": None, "overwrite": None}
+           "authorized": None, "detection_id": None, "ownership": None, "overwrite": None,
+           "peeled": res.get("peeled"), "order_proof": None}
     if res["verdict"] == "none":
         return out
 
@@ -329,6 +390,12 @@ def analyse(suspect_path: str, page_url: str | None = None, image_url: str | Non
                 "record_hash": reg["record"]["record_hash"],
                 "chain_ok": reg["chain"]["ok"], "copy_hash_matches": reg["copy_matches"]}
             out["verdict"], out["overwrite"] = res["verdict"], res["overwrite"]
+        out["seconds"] = round(time.time() - t0, 2)
+
+    # Which came first, our copy or the foreign mark on top? (src/defence.order_proof)
+    if res["verdict"] in ("watermark_peeled", "watermark_overwritten") and res["copy_id"] is not None:
+        with _lock:
+            out["order_proof"] = order_evidence(res, suspect_path, p)
         out["seconds"] = round(time.time() - t0, 2)
 
     product = store.get_product(res["product_id"])
@@ -354,7 +421,8 @@ def analyse(suspect_path: str, page_url: str | None = None, image_url: str | Non
             image_url=image_url, page_url=page_url, snapshot_path=suspect_path,
             aligned_path=aligned_path, authorized=out["authorized"],
             details={"stages": res["stages"], "sha256": sha256(suspect_path),
-                     "ownership": out["ownership"], "overwrite": out["overwrite"]})
+                     "ownership": out["ownership"], "overwrite": out["overwrite"],
+                     "peeled": out["peeled"], "order_proof": out["order_proof"]})
     return out
 
 

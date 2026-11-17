@@ -26,6 +26,10 @@
 #                      copy attack (watermark transplanted onto another image)
 #   watermark_aligned  read succeeded after alignment -> proves the suspect
 #                      derives from the published, watermarked copy
+#   watermark_peeled   another system's watermark (ours with a foreign ID, TrustMark, WAM,
+#                      Video Seal) was found on top; after regenerating and subtracting
+#                      it, OUR ID reads (blind, or after alignment). result["peeled"]
+#                      names the system(s), their message and the scale (needs peelers=)
 #   watermark_overwritten  (after mark_overwritten) same picture, our ID not
 #                      readable, but the calibrated informed check (or the DCT
 #                      layer) finds one of our copies' exact signal underneath:
@@ -155,8 +159,10 @@ class DefencePipeline:
     to the channel it came from.
     """
 
-    def __init__(self, model: HiddenV2Model):
+    def __init__(self, model: HiddenV2Model, peelers: list | None = None):
         self.model = model
+        # peel-off stage (off when empty, so earlier results stay reproducible)
+        self.peelers = list(peelers or [])
         self.products: dict[int, dict] = {}   # product_id -> {original_path, fp, copy_ids}
         self.copy_to_product: dict[int, int] = {}
 
@@ -184,8 +190,18 @@ class DefencePipeline:
         x = torch.from_numpy(rgb.astype(np.float32) / 255).permute(2, 0, 1).unsqueeze(0)
         return self.model._decode_tensor(x.to(self.model.device))
 
-    def _verify(self, bits: np.ndarray, product_id: int) -> dict | None:
-        """Blind decode first; otherwise compare with this product's codewords."""
+    def _read_variants(self, rgb: np.ndarray) -> list:
+        """Codeword estimates to verify after alignment: [one word] for a plain model;
+        a model with decode_variants (src/tiles.TiledModel) returns several."""
+        if not hasattr(self.model, "decode_variants"):
+            return [self._read(rgb)]
+        x = torch.from_numpy(rgb.astype(np.float32) / 255).permute(2, 0, 1).unsqueeze(0)
+        return self.model.decode_variants(x.to(self.model.device))
+
+    def _verify(self, bits: np.ndarray, product_id: int, extra_tests: int = 1) -> dict | None:
+        """Blind decode first; otherwise compare with this product's codewords.
+        extra_tests: how many times this check is repeated for one suspect (peel-off
+        scales), so the per-suspect false-positive budget stays VERIFY_FPR."""
         blind = decode_payload(bits)
         if blind["product_id"] in self.copy_to_product:
             return {"copy_id": blind["product_id"], "bit_errors": blind["errors_corrected"],
@@ -193,13 +209,62 @@ class DefencePipeline:
         copy_ids = self.products[product_id]["copy_ids"]
         if not copy_ids:
             return None
-        limit = max_errors_for_fpr(PAYLOAD_BITS, len(copy_ids) * TOP_K, VERIFY_FPR)
+        limit = max_errors_for_fpr(PAYLOAD_BITS, len(copy_ids) * TOP_K * extra_tests, VERIFY_FPR)
         errors = {cid: int((bits != encode_product_id(cid)).sum()) for cid in copy_ids}
         best = min(errors, key=errors.get)
         if errors[best] <= limit:
             return {"copy_id": best, "bit_errors": errors[best], "method": "candidate",
                     "limit": limit}
         return None
+
+    def _peel(self, rgb: np.ndarray, product_id: int | None = None,
+              foreign_id: int | None = None) -> dict | None:
+        """
+        Peel-off (Part B1). Every peeler reads ITS OWN message from the image (native
+        "present" decision, foreign IDs of ours only if not registered). For the marks
+        found, regenerate their residuals on this image at the system's default strength,
+        subtract them scaled by each of PEEL_SCALES (the thief's strength is unknown) and
+        read our watermark again: blind (product_id None, the ID must be registered) or,
+        after alignment, against this product's codewords. If nothing reads, peel once at
+        scale 1 and look for marks that were hidden underneath (2 stacked systems).
+        Returns {"found": [...], "copy_id", "bits", "info"} or None if no mark was found.
+        """
+        found, base, tried = [], rgb, set()
+        for _round in range(2):
+            marks = []
+            for p in self.peelers:
+                if p.name in tried:
+                    continue
+                msg = p.foreign_read(base)
+                if msg is None:
+                    continue
+                if p.name == "ours" and int(msg) in self.copy_to_product:
+                    continue                       # that is our own ID, not a foreign mark
+                tried.add(p.name)
+                marks.append({"system": p.name, "message": _msg_repr(msg),
+                              "residual": p.residual(base, msg)})
+            if not marks:
+                break
+            found += [{"system": m["system"], "message": m["message"]} for m in marks]
+            r = sum(m["residual"] for m in marks)
+            x = base.astype(np.float32) / 255
+            for scale in PEEL_SCALES:
+                peeled = (np.clip(x - scale * r, 0, 1) * 255).round().astype(np.uint8)
+                bits = self._read(peeled)
+                if product_id is None:
+                    got = decode_payload(bits)["product_id"]
+                    hit = ({"copy_id": got, "bit_errors": decode_payload(bits)["errors_corrected"]}
+                           if got in self.copy_to_product else None)
+                else:
+                    hit = self._verify(bits, product_id, extra_tests=2 * len(PEEL_SCALES))
+                if hit:
+                    return {"found": found, "copy_id": hit["copy_id"], "bits": bits,
+                            "info": {"systems": [f["system"] for f in found],
+                                     "messages": [f["message"] for f in found],
+                                     "scale": scale, "bit_errors": hit["bit_errors"],
+                                     "round": _round + 1}}
+            base = (np.clip(x - r, 0, 1) * 255).round().astype(np.uint8)
+        return {"found": found, "copy_id": None} if found else None
 
     def content_bound(self, suspect: np.ndarray, product_id: int) -> dict:
         """
@@ -234,7 +299,8 @@ class DefencePipeline:
                        "aspect": blind.get("aspect"),
                        "note": None if known or blind["product_id"] is None
                        else "decoded an ID that is not registered",
-                       "foreign_id": None if known else blind["product_id"]})
+                       "foreign_id": None if known else blind["product_id"],
+                       "tentative": blind.get("tentative")})
         out["bits"] = blind["bits"]
         if known:
             out.update(verdict="watermark", copy_id=blind["product_id"],
@@ -247,6 +313,16 @@ class DefencePipeline:
                     # a transplanted watermark, or the image is too altered to compare
                     out["verdict"] = "watermark_unbound"
             return out
+        # 1b. peel-off: someone else's watermark on top of ours?
+        if self.peelers and self.products:
+            peeled = self._peel(suspect, foreign_id=blind["product_id"])
+            stages.append({"stage": "peel_blind", "ok": peeled is not None and peeled.get("copy_id") is not None,
+                           "found": peeled["found"] if peeled else []})
+            if peeled and peeled.get("copy_id") is not None:
+                out.update(verdict="watermark_peeled", copy_id=peeled["copy_id"],
+                           product_id=self.copy_to_product[peeled["copy_id"]],
+                           bits=peeled["bits"], peeled={**peeled["info"], "stage": "blind"})
+                return out
         if not use_alignment or not self.products:
             return out
 
@@ -276,8 +352,13 @@ class DefencePipeline:
             info = {"product_id": cand["product_id"], "inliers": cand["inliers"],
                     "flipped": cand["flipped"], "coverage": round(coverage, 3),
                     "similarity": round(similarity, 3)}
-            bits = self._read(aligned)
-            verified = self._verify(bits, cand["product_id"])
+            variants = self._read_variants(aligned)
+            bits, verified = variants[0], None
+            for b in variants:                 # one word for the plain model; tiles give several
+                verified = self._verify(b, cand["product_id"], extra_tests=len(variants))
+                if verified:
+                    bits = b
+                    break
             if verified:
                 out["bits"] = bits
                 stages.append({"stage": "retrieve", "ok": True, **info})
@@ -300,6 +381,25 @@ class DefencePipeline:
             info, aligned = best_visual
             stages.append({"stage": "retrieve", "ok": True, **info})
             stages.append({"stage": "align_verify", "ok": False})
+            # A retry read with many corrected errors (HiddenV2Model.retry_max_errors) counts
+            # only if alignment shows the picture of the product that ID belongs to
+            tent = blind.get("tentative")
+            if tent and self.copy_to_product.get(tent["product_id"]) == info["product_id"]:
+                stages.append({"stage": "retry_confirmed", "ok": True, **tent})
+                out.update(verdict="watermark", copy_id=tent["product_id"],
+                           product_id=info["product_id"], aligned=aligned)
+                return out
+            if self.peelers:
+                peeled = self._peel(aligned, product_id=info["product_id"])
+                stages.append({"stage": "peel_aligned",
+                               "ok": peeled is not None and peeled.get("copy_id") is not None,
+                               "found": peeled["found"] if peeled else []})
+                if peeled and peeled.get("copy_id") is not None:
+                    out.update(verdict="watermark_peeled", copy_id=peeled["copy_id"],
+                               product_id=self.copy_to_product[peeled["copy_id"]],
+                               bits=peeled["bits"], aligned=aligned,
+                               peeled={**peeled["info"], "stage": "aligned"})
+                    return out
             out.update(verdict="fingerprint_only", product_id=info["product_id"], aligned=aligned)
         else:
             top = candidates[0]
@@ -307,6 +407,103 @@ class DefencePipeline:
                            "note": "features matched but the pictures differ "
                                    "(same object, different photo?)"})
         return out
+
+
+# ─── peel-off: regenerate and subtract a foreign watermark ─────────
+
+PEEL_SCALES = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0)   # multiples of the foreign system's default strength
+
+
+def _msg_repr(msg) -> str:
+    if isinstance(msg, (int, np.integer)):
+        return str(int(msg))
+    if isinstance(msg, str):
+        return msg if len(msg) <= 16 else f"{int(msg, 2):x}" if set(msg) <= {"0", "1"} else msg
+    bits = np.asarray(msg).astype(np.uint8).reshape(-1)
+    return "".join(map(str, bits)) if len(bits) <= 16 else f"{int(''.join(map(str, bits)), 2):x}"
+
+
+class OursPeeler:
+    """Our own model as a foreign system: a thief re-protected the image with our model
+    and another ID (a different, unregistered copy ID decodes)."""
+    name = "ours"
+
+    def __init__(self, model: HiddenV2Model, embed_kwargs: dict | None = None, key=None):
+        self.model = model
+        self.kw = {"strength": 1.0, "mask_floor": None, **(embed_kwargs or {})}
+        self.key = key
+
+    def _x(self, rgb):
+        return torch.from_numpy(rgb.astype(np.float32) / 255).permute(2, 0, 1).unsqueeze(0).to(self.model.device)
+
+    def foreign_read(self, rgb):
+        return decode_payload(self.model._decode_tensor(self._x(rgb), self.key))["product_id"]
+
+    @torch.no_grad()
+    def residual(self, rgb, message, strength=None):
+        x = self._x(rgb)
+        m = torch.tensor(_codeword_any(int(message)), dtype=torch.float32, device=x.device).view(1, -1)
+        kw = {**self.kw, **({} if strength is None else {"strength": strength})}
+        y = self.model.model.watermark(x, m, key=self.model.key(1, self.key), **kw)
+        return (y - x)[0].permute(1, 2, 0).cpu().numpy()
+
+
+# ─── order proof: which came first, our copy or the thief's mark? ──
+
+ORDER_Z = 4.0      # decision threshold, checked on the null in tests/test_order_proof.py
+
+
+def order_proof(model: HiddenV2Model, suspect_rgb: np.ndarray, original_rgb: np.ndarray,
+                copy_id: int, peeler, message, embed_kwargs: dict | None = None,
+                n_decoys: int = 50, side: int = 512, seed: int = 0) -> dict:
+    """
+    Part B2. The suspect carries a foreign message m of system S (peeler.foreign_read).
+    Two stories: (A) the thief put m on OUR issued copy, (B) the thief put m on a leaked
+    clean original. Rebuild both: A = S(our copy, m), B = S(original, m), with the thief's
+    strength estimated by least squares, and project the suspect onto the line B -> A:
+    t = <s - B, A - B> / |A - B|^2 (t ~ 1: story A, t ~ 0: story B).
+    Calibration: the same t for n_decoys copies that were never issued (decoy IDs outside
+    the ID space); under story B our copy is no different from a decoy, so
+    z = (t - mean_decoys) / std_decoys is ~N(0, 1). Decision "our copy came first" if
+    z >= ORDER_Z. Suspect must be aligned to the original's frame. Computed at `side` px.
+    """
+    kw = {"strength": 1.0, "mask_floor": None, **(embed_kwargs or {})}
+    h, w = original_rgb.shape[:2]
+    sc = side / max(h, w)
+    size = (max(1, round(w * sc)), max(1, round(h * sc)))
+    o = cv2.resize(original_rgb, size, interpolation=cv2.INTER_AREA)
+    s = cv2.resize(suspect_rgb, size, interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+    x = torch.from_numpy(o.astype(np.float32) / 255).permute(2, 0, 1).unsqueeze(0).to(model.device)
+    rng = np.random.default_rng(seed)
+    ids = [copy_id] + [int(v) for v in rng.integers(1 << 21, 1 << 30, n_decoys)]
+    with torch.no_grad():
+        msgs = torch.tensor(np.stack([_codeword_any(c) for c in ids]), dtype=torch.float32,
+                            device=model.device)
+        copies = []
+        for start in range(0, len(ids), 64):
+            n = len(ids[start:start + 64])
+            wm = model.model.watermark(x.expand(n, -1, -1, -1), msgs[start:start + n],
+                                       key=model.key(n), **kw)
+            copies.append(wm.permute(0, 2, 3, 1).cpu().numpy())
+    copies = np.concatenate(copies)
+    of = o.astype(np.float32) / 255
+    r_o = peeler.residual(o, message)                         # thief's mark on the clean original
+    denom = float((r_o * r_o).sum()) + 1e-12
+    a = float(np.clip(((s - of) * r_o).sum() / denom, 0.25, 8.0))   # thief strength estimate
+    B = np.clip(of + a * r_o, 0, 1)
+    ts = []
+    for c in copies:
+        cu = (c * 255).round().astype(np.uint8)
+        A = np.clip(c + a * peeler.residual(cu, message), 0, 1)
+        d = A - B
+        ts.append(float(((s - B) * d).sum() / (float((d * d).sum()) + 1e-12)))
+    t, null = ts[0], np.array(ts[1:])
+    z = float((t - null.mean()) / (null.std() + 1e-12))
+    return {"t": round(t, 3), "z": round(z, 2), "scale": round(a, 2),
+            "null_mean": round(float(null.mean()), 3), "null_std": round(float(null.std()), 3),
+            "p_empirical": (1 + int((null >= t).sum())) / (len(null) + 1),
+            "our_copy_first": z >= ORDER_Z, "system": peeler.name, "message": _msg_repr(message),
+            "n_decoys": n_decoys}
 
 
 # ─── ownership dispute: informed (non-blind) check ────────────────

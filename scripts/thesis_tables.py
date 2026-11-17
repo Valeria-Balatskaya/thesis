@@ -140,6 +140,42 @@ if b:
             sub = [x for x in rows if x["system"] == a and x["setting"] == s and x["attack"] == atk]
             cells.append(f"{sum(int(x['rav']) for x in sub)}/{len(sub)} ({sum(int(x['blind']) for x in sub)})")
         lines.append(f"| {atk}{' *' if atk in GEOMETRIC else ''} | " + " | ".join(cells) + " |")
+    so = load("output/self_overwrite/summary.csv")
+    if so:
+        lines += ["", "## Who survives being overwritten by their own system", "",
+                  "Source: `output/self_overwrite/` (tests/test_self_overwrite.py). A thief re-protects the "
+                  "copy with the same system and another message at 1–3× its default strength. "
+                  "Ownership (ours only): blind read or calibrated informed check z ≥ 4.", "",
+                  "| System | Thief | Post | × | Thief ΔE | Original read blind | Thief's message read | Ownership |",
+                  "|---|---|---|---|---|---|---|---|"]
+        for x in so:
+            n = int(x["n"])
+            own = frac_ci(int(x["owned"]), n) if x["owned"] not in ("", "None") else "–"
+            lines.append(f"| {x['system']} | {x['thief'].replace('_', ' ')} | {x['post']} | {num(x['level']):g} | "
+                         f"{num(x['thief_dE']):.2f} | {frac_ci(int(x['original_read']), n)} | "
+                         f"{frac_ci(int(x['thief_read']), n)} | {own} |")
+    ai = load("output/ai_attacks/summary.csv")
+    if ai:
+        names = list(dict.fromkeys(x["system"] for x in ai))
+        lines += ["", "## Generative-AI attacks and the TrustMark remover", "",
+                  "Source: `output/ai_attacks/` (tests/test_ai_attacks.py). Cells: + Retrieve–Align–Verify "
+                  "(blind in brackets); ours also the deployed pipeline and ownership (pipeline or informed "
+                  "z ≥ 4). ΔE = how much the attack itself changed the picture (mean over systems).", "",
+                  "| Attack | ΔE attack | " + " | ".join(names) + " |", "|---|---|" + "---|" * len(names)]
+        for atk in dict.fromkeys(x["attack"] for x in ai):
+            sub = [x for x in ai if x["attack"] == atk]
+            cells = []
+            for nm in names:
+                c = next((x for x in sub if x["system"] == nm), None)
+                if c is None:
+                    cells.append("–")
+                    continue
+                n = int(c["n"])
+                cell = f"{pct_ci(int(c['rav']), n)} ({int(c['blind'])})"
+                if nm.startswith("ours"):
+                    cell += f"; pipeline {int(c['deployed'])}/{n}, ownership {int(c['owned'])}/{n}"
+                cells.append(cell)
+            lines.append(f"| {atk} | {mean(num(x['dE_attack']) for x in sub):.2f} | " + " | ".join(cells) + " |")
     write("baselines", "Comparison with pretrained watermarks", "output/baselines/", lines)
 else:
     print("skip baselines: run tests/test_baselines.py")
@@ -165,6 +201,77 @@ if a:
     write("ablation", "Ablation: one component removed at a time", "output/ablation/summary.csv", lines)
 else:
     print("skip ablation: run tests/test_ablation.py")
+
+# ─── overwrite defences without training (peel-off, order proof, retry rule, tiles) ───
+lines = []
+po = load("output/peel_off/summary.csv")
+if po:
+    lines += ["## Peel-off (victim: ours v3; 40 photos, 20 own + 20 ABO)", "",
+              "Source: `output/peel_off/` (tests/test_peel_off.py). The thief re-protects our copy; the "
+              "pipeline finds the foreign mark, regenerates and subtracts it, reads ours again.", "",
+              "| Thief | × | Post | Thief ΔE | Blind before | Blind after | Pipeline before | Pipeline after | Wrong |",
+              "|---|---|---|---|---|---|---|---|---|"]
+    for x in po:
+        n = int(x["n"])
+        lines.append(f"| {x['thief']} | {x['level']} | {x['post']} | {num(x['thief_dE']):.2f} | "
+                     f"{frac_ci(int(x['blind_before']), n)} | {frac_ci(int(x['blind_after']), n)} | "
+                     f"{frac_ci(int(x['pipeline_before']), n)} | {frac_ci(int(x['pipeline_after']), n)} | {x['wrong_after']} |")
+    neg, fo = load("output/peel_off/negatives.csv"), load("output/peel_off/foreign_on_original.csv")
+    if neg:
+        k = sum(int(x["claim"]) or int(x["peel_claim"]) for x in neg)
+        lines += ["", f"False positives (any registered ID): never-protected images {pct_ci(k, len(neg), 2)}"
+                  + (f"; clean originals carrying only a foreign mark {frac_ci(sum(int(x['claim']) or int(x['peel_claim']) for x in fo), len(fo))}" if fo else "")]
+op = load("output/order_proof/summary.csv")
+if op:
+    lines += ["", "## Order proof (40 photos, 25 decoy copies, decision z ≥ 4)", "",
+              "Source: `output/order_proof/` (tests/test_order_proof.py). Positive: thief marked our issued "
+              "copy. Null: thief marked a leaked clean original — must never say 'ours first'.", "",
+              "| Thief | × | Post | Ours first (positive) | Median z | Ours first (null, false) | Max null z |",
+              "|---|---|---|---|---|---|---|"]
+    for x in op:
+        n = int(x["n"])
+        lines.append(f"| {x['system']} | {x['level']} | {x['post']} | {frac_ci(int(x['ours_first_pos']), n)} | "
+                     f"{num(x['z_median_pos']):.1f} | {frac_ci(int(x['ours_first_null']), n)} | {num(x['z_max_null']):.2f} |")
+    kp, kn = sum(int(x["ours_first_pos"]) for x in op), sum(int(x["ours_first_null"]) for x in op)
+    nn = sum(int(x["n"]) for x in op)
+    lines.append(f"| all | | | {pct_ci(kp, nn)} | | {pct_ci(kn, nn, 2)} | {max(num(x['z_max_null']) for x in op):.2f} |")
+rr = load("output/retry_rule/summary.csv")
+if rr:
+    x = rr[0]
+    n, nn = int(x["n"]), int(x["neg_n"])
+    lines += ["", "## Retry rule (retry reads need ≤ 4 corrected errors or alignment confirmation)", "",
+              "Source: `output/retry_rule/` (tests/test_retry_rule.py), 90 photos × 23 attacks, mirror retry on.", "",
+              "| Rule | Blind | Full pipeline | Blind IDs on never-protected | Pipeline claims on never-protected |",
+              "|---|---|---|---|---|",
+              f"| off | {pct_ci(int(x['blind_off']), n)} | {pct_ci(int(x['full_off']), n)} | "
+              f"{pct_ci(int(x['neg_blind_off']), nn, 2)} | {pct_ci(int(x['neg_claim_off']), nn, 2)} |",
+              f"| on | {pct_ci(int(x['blind_on']), n)} | {pct_ci(int(x['full_on']), n)} | "
+              f"{pct_ci(int(x['neg_blind_on']), nn, 2)} | {pct_ci(int(x['neg_claim_on']), nn, 2)} |"]
+ts, tq = load("output/tiles/summary.csv"), load("output/tiles/quality.csv")
+if ts:
+    lines += ["", "## Spatial redundancy: 2×2 tiles vs whole image (v3, no training)", "",
+              "Source: `output/tiles/` (tests/test_tiles.py). Cells: full pipeline (blind in brackets).", ""]
+    for v in ("whole", "tiles_2x2"):
+        q = [y for y in tq if y["variant"] == v]
+        if q:
+            lines.append(f"- {v}: PSNR {mean(num(y['psnr']) for y in q):.1f} dB, ΔE {mean(num(y['dE']) for y in q):.2f}, "
+                         f"ΔE background {mean(num(y['dE_flat']) for y in q if num(y['dE_flat']) is not None):.2f}")
+    lines += ["", "| Test | whole | tiles 2×2 |", "|---|---|---|"]
+    for atk in dict.fromkeys(y["attack"] for y in ts):
+        cells = []
+        for v in ("whole", "tiles_2x2"):
+            c = next((y for y in ts if y["variant"] == v and y["attack"] == atk), None)
+            if c is None:
+                cells.append("–")
+            elif atk == "false_positives":
+                cells.append(frac_ci(int(c["blind"]), int(c["n"])))
+            else:
+                cells.append(f"{frac_ci(int(c['full']), int(c['n']))} ({c['blind']})")
+        lines.append(f"| {atk} | " + " | ".join(cells) + " |")
+if lines:
+    write("overwrite_defences", "Overwrite defences without training", "output/peel_off, order_proof, retry_rule, tiles", lines)
+else:
+    print("skip overwrite defences: run tests/test_peel_off.py, test_order_proof.py, test_retry_rule.py, test_tiles.py")
 
 # ─── real world ───────────────────────────────────────────────────
 rw = load("output/real_world/summary.csv")

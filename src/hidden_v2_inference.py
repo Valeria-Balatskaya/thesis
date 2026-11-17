@@ -111,6 +111,11 @@ class HiddenV2Model:
 
     # Off by default so earlier results stay reproducible; the app/tests switch it on
     try_mirror: bool = False
+    # Retry false-positive mitigation (tests/test_retry_rule.py): a read that only an
+    # aspect-ratio or mirror retry produced is accepted only with <= retry_max_errors
+    # corrected bit errors; otherwise it is returned as "tentative" (product_id None) and
+    # DefencePipeline accepts it only if alignment confirms the picture. None = off.
+    retry_max_errors: int | None = None
 
     def read_product(self, image_path: str, try_aspects: bool = True,
                      aspect_ratios: list | None = None, key: torch.Tensor | None = None,
@@ -128,16 +133,28 @@ class HiddenV2Model:
         """
         x = self._load(image_path)
         bits = self._decode_tensor(x, key)
-        result = {**decode_payload(bits), "bits": bits, "aspect": None, "mirrored": False}
+        result = {**decode_payload(bits), "bits": bits, "aspect": None, "mirrored": False,
+                  "tentative": None}
         if result["product_id"] is not None:
             return result
         mirror = self.try_mirror if try_mirror is None else try_mirror
+        limit = self.retry_max_errors
+
+        def accept(attempt, aspect, flipped):
+            hit = {**attempt, "bits": bits, "aspect": aspect, "mirrored": flipped, "tentative": None}
+            if limit is None or attempt["errors_corrected"] <= limit:
+                return hit
+            if result["tentative"] is None:          # keep the first one, keep looking
+                result["tentative"] = {"product_id": attempt["product_id"], "aspect": aspect,
+                                       "mirrored": flipped, "errors_corrected": attempt["errors_corrected"]}
+            return None
+
         for flipped in ([False, True] if mirror else [False]):
             xi = torch.flip(x, dims=[3]) if flipped else x
             if flipped:
                 attempt = decode_payload(self._decode_tensor(xi, key))
-                if attempt["product_id"] is not None:
-                    return {**attempt, "bits": bits, "aspect": None, "mirrored": True}
+                if attempt["product_id"] is not None and (hit := accept(attempt, None, True)):
+                    return hit
             if not try_aspects:
                 continue
             _, _, h, w = xi.shape
@@ -150,19 +167,6 @@ class HiddenV2Model:
                 top, left = (new_h - h) // 2, (new_w - w) // 2
                 canvas[:, :, top:top + h, left:left + w] = xi
                 attempt = decode_payload(self._decode_tensor(canvas, key))
-                if attempt["product_id"] is not None:
-                    return {**attempt, "bits": bits, "aspect": f"{aw}:{ah}", "mirrored": flipped}
-        return result
-        _, _, h, w = x.shape
-        for aw, ah in (ASPECT_RATIOS if aspect_ratios is None else aspect_ratios):
-            # Smallest canvas of that aspect ratio that contains the image
-            new_w, new_h = max(w, round(h * aw / ah)), max(h, round(w * ah / aw))
-            if (new_w, new_h) == (w, h):
-                continue
-            canvas = torch.full((1, 3, new_h, new_w), 0.5, device=x.device)
-            top, left = (new_h - h) // 2, (new_w - w) // 2
-            canvas[:, :, top:top + h, left:left + w] = x
-            attempt = decode_payload(self._decode_tensor(canvas, key))
-            if attempt["product_id"] is not None:
-                return {**attempt, "bits": bits, "aspect": f"{aw}:{ah}"}
+                if attempt["product_id"] is not None and (hit := accept(attempt, f"{aw}:{ah}", flipped)):
+                    return hit
         return result

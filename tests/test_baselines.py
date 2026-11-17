@@ -2,7 +2,8 @@
 # Our system vs pretrained robust watermarks (Part 4; objectives 1.2.2, 1.2.3, 1.2.4, 1.4).
 #
 # Systems (src/baselines.py): ours (HiDDeN v3, and v4 if present), Adobe TrustMark (Q),
-# Meta Watermark Anything (MIT weights). Each at
+# Meta Watermark Anything (MIT weights), Meta Video Seal 1.0 (image mode, 256 bits; added
+# 2026-11-17, run with SYSTEMS=videoseal, the other rows are kept). Each at
 #   default   the system's own default strength
 #   matched   strength tuned so the mean CIEDE2000 dE (whole image) on a calibration subset
 #             (first 5 photos of each set) equals ours (v3) -> same visibility budget
@@ -33,7 +34,7 @@ import numpy as np
 from PIL import Image
 
 from src.attack_suite import ATTACKS, GEOMETRIC
-from src.baselines import Ours, TrustMarkBaseline, WAMBaseline
+from src.baselines import Ours, TrustMarkBaseline, WAMBaseline, VideoSealBaseline
 from src.defence import DefencePipeline, fingerprint, match, align
 from src.metrics import compute, visibility
 from src.stats import pct_ci
@@ -44,7 +45,7 @@ OUT = "output/baselines"
 WORK = "results/baselines"
 os.makedirs(OUT, exist_ok=True)
 os.makedirs(WORK, exist_ok=True)
-want = os.environ.get("SYSTEMS", "v3,v4,trustmark,wam").split(",")
+want = os.environ.get("SYSTEMS", "v3,v4,trustmark,wam,videoseal").split(",")
 settings_wanted = os.environ.get("SETTINGS", "default,matched").split(",")
 
 
@@ -69,7 +70,7 @@ if "v3" in want:
     systems["v3"] = Ours("checkpoints/hidden_v3_best.pt", label="ours_v3")
 if "v4" in want and os.path.exists("checkpoints/hidden_v4_best.pt"):
     systems["v4"] = Ours("checkpoints/hidden_v4_best.pt", label="ours_v4")
-for key, cls in (("trustmark", TrustMarkBaseline), ("wam", WAMBaseline)):
+for key, cls in (("trustmark", TrustMarkBaseline), ("wam", WAMBaseline), ("videoseal", VideoSealBaseline)):
     if key in want:
         try:
             systems[key] = cls()

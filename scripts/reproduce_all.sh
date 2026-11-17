@@ -60,7 +60,15 @@ fi
 # Ch. 6.8 — overhead (1.2.4)
 step overhead "15 min"            "$PY" tests/test_overhead.py
 # Ch. 6.9 — pretrained baselines (TrustMark, Watermark Anything)
-step baselines "3-4 h"            "$PY" tests/test_baselines.py 30
+step baselines "3-4 h"            "$PY" tests/test_baselines.py 30   # SYSTEMS=... to add one; rows resume
+# Ch. 6.9b — industry comparison: self-overwrite, AI attacks + TrustMark-RM, Video Seal
+step self_overwrite "40 min"      "$PY" tests/test_self_overwrite.py 20 20
+step ai_attacks "4-5 h"           env PER_SET=10 "$PY" tests/test_ai_attacks.py 30
+# Ch. 6.5b — overwrite defences without training
+step peel_off "90 min"            "$PY" tests/test_peel_off.py 20 20 1000
+step order_proof "3 h"            "$PY" tests/test_order_proof.py 20 20
+step retry_rule "35 min"          "$PY" tests/test_retry_rule.py 30
+step tiles "2 h"                  "$PY" tests/test_tiles.py 30 30 1000
 # Ch. 6.10 — ablation; appendix: parameter study and texture masks (v2 era)
 step ablation "60 min"            "$PY" tests/test_ablation.py 30 30 500
 step parameter_study "40 min"     "$PY" tests/test_parameter_study.py 30

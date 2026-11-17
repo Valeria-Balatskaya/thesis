@@ -258,6 +258,12 @@ _VERDICT_TEXT = {
                           "into place, and the watermark was then read. Areas the found image does not "
                           "cover were filled from the un-watermarked original, which cannot contribute "
                           "watermark signal."),
+    "watermark_peeled": ("Watermark read after removing a mark on top",
+                         "The blind decoder could not read our ID because another watermark had been "
+                         "added on top of ours. That watermark's own decoder read its message; the "
+                         "service regenerated that watermark for that message, subtracted it, and then "
+                         "read our ID (with its keyed check tag, or after alignment against this "
+                         "product's copies at a false-positive rate of 1e-6)."),
     "watermark_overwritten": ("Overwritten: our watermark found underneath (ownership dispute)",
                               "The found image shows the registered photograph, but the blind decoder "
                               "could not read our ID from it: either someone wrote another watermark over "
@@ -370,6 +376,18 @@ def report(detection_id: int):
             facts.append(f"Our copy was registered at {reg['created_at']} UTC (log record #{reg['seq']}, "
                          f"chain {'intact' if reg['chain_ok'] else 'BROKEN'}); a mark written over it "
                          "can only be later.")
+    pe = d["details"].get("peeled")
+    if pe:
+        facts.append(f"Mark(s) found on top: {', '.join(pe['systems'])} (message "
+                     f"{', '.join(pe['messages'])}); subtracted at {pe['scale']}x its default strength "
+                     f"({'blind read' if pe['stage'] == 'blind' else 'after alignment'}, "
+                     f"{pe['bit_errors']} bit errors).")
+    for op in d["details"].get("order_proof") or []:
+        facts.append(f"Order proof against the {op['system']} mark: the found image matches "
+                     f"'{op['system']} added to OUR issued copy' with t = {op['t']:.2f} (1 = exact, "
+                     f"0 = added to the clean original instead); z = {op['z']:.1f} against "
+                     f"{op['n_decoys']} never-issued copies (threshold 4) -> "
+                     + ("our copy came first." if op["our_copy_first"] else "order not established."))
     own = d["details"].get("ownership")
     if own:
         for o in own:

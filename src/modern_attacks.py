@@ -227,3 +227,38 @@ def replace_background(image_path: str, output_path: str,
     bg = Image.fromarray(np.broadcast_to(grad, (h, w, 3)).astype(np.uint8))
     bg.paste(cut, (0, 0), cut)
     bg.save(output_path, format="PNG")
+
+
+_sd = None
+SD_MODEL = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+
+
+def img2img(image_path: str, output_path: str, strength: float = 0.2, steps: int = 50,
+            max_side: int = 512, seed: int = 0) -> None:
+    """
+    Diffusion regeneration (Zhao et al. 2023; WAVES, An et al. 2024): Stable Diffusion 1.5
+    img2img with an empty prompt and no classifier-free guidance (guidance_scale 1), so
+    the model only re-synthesises the picture. DDIM scheduler, 50 steps (strength 0.1 =
+    5 denoising steps); the pipeline's default PNDM with few steps adds strong artefacts. `strength` = fraction of the noise schedule
+    added before denoising (0.1 = light touch-up, 0.5 = details change visibly). The
+    image is processed at max_side px (SD's native 512) and resized back.
+    Runs on Apple MPS (fp32) or CUDA when available, else CPU.
+    """
+    global _sd
+    import torch
+    from diffusers import StableDiffusionImg2ImgPipeline, DDIMScheduler
+    dev = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+    if _sd is None:
+        _sd = StableDiffusionImg2ImgPipeline.from_pretrained(
+            SD_MODEL, variant="fp16", torch_dtype=torch.float32, safety_checker=None,
+            requires_safety_checker=False).to(dev)
+        _sd.scheduler = DDIMScheduler.from_config(_sd.scheduler.config)
+        _sd.set_progress_bar_config(disable=True)
+    img = _open(image_path)
+    orig_size = img.size
+    img.thumbnail((max_side, max_side), Image.LANCZOS)
+    w, h = (img.width // 8) * 8, (img.height // 8) * 8
+    g = torch.Generator("cpu").manual_seed(seed)
+    out = _sd(prompt="", image=img.resize((w, h), Image.LANCZOS), strength=strength,
+              num_inference_steps=steps, guidance_scale=1.0, generator=g).images[0]
+    out.resize(orig_size, Image.LANCZOS).save(output_path, format="PNG")

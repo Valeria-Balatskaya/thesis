@@ -35,7 +35,12 @@ AI edits) back to the seller/product it came from. The author develops on a Mac
   -> 3 warp suspect into the original's frame (uncovered pixels filled from the
   UN-watermarked original) -> 4 read again; with one candidate product the bits may
   also be matched to its known codewords (<= ~11 errors at FPR 1e-6 instead of BCH's 6).
-  Verdicts: `watermark`, `watermark_aligned`, `fingerprint_only`, `none`.
+  Verdicts: `watermark`, `watermark_aligned`, `fingerprint_only`, `none`, `watermark_peeled`.
+  `DefencePipeline(model, peelers=)` = peel-off: a foreign mark read by a peeler (`OursPeeler`,
+  TrustMark, WAM, Video Seal) is regenerated, subtracted (scales `PEEL_SCALES`, 2 rounds) and ours
+  read again; `order_proof()` = which came first (thief's mark on our copy vs on the clean original,
+  z vs decoys, `ORDER_Z` 4). A retry read over `HiddenV2Model.retry_max_errors` is "tentative" and
+  accepted only if alignment confirms the product (`retry_confirmed`)
   `informed_score()` = non-blind check for one copy's exact residual (legacy, 8 decoys);
   `InformedChecker` = calibrated version (z vs 500 never-issued copies, `Z_THRESHOLD` 4);
   `ownership_check()` = informed v2 + DCT layer; `analyse(verify_content=True)` = copy-attack
@@ -46,13 +51,18 @@ AI edits) back to the seller/product it came from. The author develops on a Mac
   A product has several *copies*, each with its own watermark ID (leak tracing)
 - `src/modern_attacks.py` — off-centre crop, rotate, mirror, perspective, page
   screenshot, phone photo of screen, messenger recompress, promo overlay, inpaint,
-  upscale; AI: `regenerate_vae` (SD VAE), `replace_background` (rembg) — optional,
+  upscale; AI: `regenerate_vae` (SD VAE), `replace_background` (rembg), `img2img` (SD 1.5, DDIM
+  50 steps, empty prompt, 512 px, MPS, ~25 s per photo for 4 strengths) — optional,
   `pip install -r requirements-ai.txt`
 - `src/stats.py` — Wilson 95% intervals (`pct_ci`, `frac_ci`); every thesis percentage uses them
 - `src/attack_suite.py` — the 23-attack thesis suite (same list as test_v3_vs_v2)
-- `src/baselines.py` — TrustMark (pip `trustmark`, Q, BCH_5, 61 bits) and Watermark Anything
-  (third_party/, MIT weights, 32 bits, detected = predicted mask >= 50%) behind one interface;
+- `src/baselines.py` — TrustMark (pip `trustmark`, Q, BCH_5, 61 bits; `remove()` = TrustMark-RM),
+  Watermark Anything (third_party/, MIT weights, 32 bits, detected = predicted mask >= 50%) and
+  Video Seal 1.0 (pip `videoseal` --no-deps, third_party/videoseal, 256 bits, detected >= 167/256,
+  scaling_w 0.2; `av` stubbed during import) behind one interface; each has `foreign_read`/`residual`
+  for peel-off;
   `bash scripts/get_baselines.sh`, `requirements-baselines.txt`
+- `src/tiles.py` — `TiledModel`: v3 per 2x2 tile, per-tile XOR mask, soft combining (B3, not adopted)
 - `app/` — **TraceMark** web app (FastAPI + SQLite, single-page UI in `app/static/index.html`):
   `main.py` routes, `guard.py` service (protect / analyse / attack lab, `STRENGTH = 0.5`;
   `precheck()` refuses uploads that are already watermarked or registered -> HTTP 409;
@@ -273,6 +283,29 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
   -alignment 68.4%; -aspect retry 98.7% full / 64.0% blind; -BCH 80.8% (FP 1/500); -HMAC tag
   FP 6/500; -texture mask 95.7% (dE bg 0.50 -> 0.76).
 
+## Follow-up 2 (2026-11-17, docs/overwrite_defences.md, Meeting 3 notes "Follow-up 2")
+- Logs `output/logs/followup/`; tables `output/thesis/baselines.md`, `overwrite_defences.md`.
+- **A1 self-overwrite** (test_self_overwrite, 40): TrustMark/WAM/Video Seal keep their original 0/40 at
+  1-3x; TrustMark, Video Seal replaced at 1x (thief ΔE 0.57/0.22). Ours v3 ownership 40/34/13/3 at
+  1/1.5/2/3x, v4 same key 39/39/34/27.
+- **A2/A3 AI attacks** (test_ai_attacks, PER_SET=10 -> 30 shared photos; ours also 90): +RAV of 30,
+  ours/TM/WAM/VS: VAE 26/26/22/29; background 25/7/2/21; img2img 0.1 16/0/0/1 (ours ownership 22);
+  0.2 11/0/0/0 (ours ownership 17); 0.3 7/0/0/0; 0.5 0 for all; VAE ours ownership 30/30; TrustMark-RM 30/2/30/30 (removes only TrustMark).
+  SD ~3 min per photo with all attacks; 90 photos per system was ~4 h.
+- **A4 Video Seal** (test_baselines SYSTEMS=videoseal, 2,070): blind 81.4% / +RAV 98.3% at ΔE 0.22,
+  0/90 FP; matched ΔE 0.95: 80.9 / 98.1%. Best baseline; ours +RAV 97.5%, deployed 98.9% at ΔE 1.24.
+  Video Seal loses to ours on self-overwrite and img2img.
+- **B1 peel-off** (test_peel_off, 40): ours-on-ours our ID blind before -> after 1x 6->14, 1.5x 2->35,
+  2x 1->35, 3x 1->26 (JPEG 32), 4x 0->6; foreign industry marks never hid ours (39-40/40); stacked
+  ours x2 2->5. FP 0/1,167 never-protected, 0/320 originals with only a foreign mark. In the app.
+- **B2 order proof** (test_order_proof, 40, 25 decoys): positives 628/640 = 98.1% [96.8-98.9]; thief on
+  a leaked clean original 0/640 "ours first" (max z 3.62). ~8 s/test. In app scan + report.
+- **B3 tiles** (test_tiles, 60 x 23 + overwrite + 1,000 neg): full 98.9 vs 98.7%, FP 0/1,000; whole-image
+  thief can't overwrite tiles (59-60/60 at 1-4x vs 17->1/60) but a tiled thief can (27/7/4/3/2 of 60);
+  50% crop 55/60 < 94% and blind native screenshot 36->5 -> **not adopted**.
+- **B4 retry rule** (test_retry_rule, 2,070 + 1,167): full pipeline 0.00 pp loss, blind false IDs 1 -> 0
+  -> `retry_max_errors = 4` **on in the app** (library default None).
+
 ## Working rules learned the hard way
 - The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
   seed it. Test with `TRACEMARK_DATA=<other folder> uvicorn app.main:app --port 8765`.
@@ -281,9 +314,9 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
 1. ✅ Fix architecture (single layered image) + honest benchmark with false positives
 2. ✅ HiDDeN v2 trained in Colab, evaluated, and integrated into the app
 3. ✅ Geometric alignment (Retrieve-Align-Verify, `src/defence.py`)
-4. Compare with pretrained robust watermarks (Watermark Anything, TrustMark, StegaStamp)
-5. Partly done: AI attacks (VAE regeneration, background replacement). Still open:
-   SD img2img at several strengths, generative inpainting, neural upscaling
+4. ✅ Compare with pretrained robust watermarks (TrustMark, Watermark Anything, Video Seal; StegaStamp not done)
+5. Partly done: AI attacks (VAE regeneration, background replacement, SD img2img 0.1-0.5). Still open:
+   generative inpainting, neural upscaling
 6. Partly done: SIFT fingerprint as second layer. Open: global embeddings
    (DINOv2/CLIP) + ANN index so retrieval scales beyond a few hundred products; C2PA
 7. Real screenshot / phone-photo / social-platform round-trip dataset (all attacks are

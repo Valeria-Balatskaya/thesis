@@ -807,3 +807,125 @@ False positives on the 1,167 never-protected images:
   - Or require alignment confirmation for retry hits.
 - The mirror retry doubles the attempts in theory (7.7e-5 → 1.5e-4 per image) but added no false
   reads in 1,167 images.
+
+## Follow-up 2 — industry comparison and overwrite defences without training (2026-11-17)
+
+All tables with Wilson intervals: `output/thesis/baselines.md`, `output/thesis/overwrite_defences.md`.
+Logs: `output/logs/followup/`.
+
+### A1 — self-overwrite: each system re-protected by itself (`tests/test_self_overwrite.py 20 20`)
+
+40 photos (20 own + 20 ABO). Thief = same system, other message, 1/1.5/2/3x its default strength.
+Clean and JPEG q70 agree within 3/40, clean shown.
+
+| System | 1x | 1.5x | 2x | 3x | Thief ΔE 1x → 3x |
+|---|---|---|---|---|---|
+| ours v3: original blind / thief read / ownership | 6 / 8 / **40** | 2 / 33 / **34** | 1 / 36 / 13 | 1 / 39 / 3 | 1.69 → 3.39 |
+| ours v4 final, same key | 4 / 3 / **39** | 1 / 23 / **39** | 1 / 33 / **34** | 0 / 35 / 27 | 1.77 → 3.58 |
+| ours v4 final, other key | 26 / 16 / 40 | 20 / 30 / 39 | 16 / 35 / 37 | 12 / 37 / 33 | 1.79 → 3.62 |
+| TrustMark Q: original / thief | 0 / 40 | 0 / 40 | 0 / 40 | 0 / 39 | 0.57 → 1.01 |
+| WAM: original / thief | 0 / 3 | 0 / 13 | 0 / 25 | 0 / 37 | 2.82 → 6.22 |
+| Video Seal: original / thief | 0 / 40 | 0 / 40 | 0 / 40 | 0 / 40 | 0.22 → 0.58 |
+
+(all counts of 40; ownership = blind read or calibrated informed check z ≥ 4)
+- **No system keeps its original message readable blind** after a same-system overwrite (TrustMark,
+  WAM, Video Seal 0/40 at every strength). Only ours keeps ownership evidence (informed check).
+- TrustMark and Video Seal are overwritten at 1x for an invisible cost (ΔE 0.22–0.57).
+- WAM at 1x: neither message readable (3/40 thief), i.e. it destroys rather than replaces.
+
+### A2 + A3 — generative-AI attacks and TrustMark-RM (`tests/test_ai_attacks.py`)
+- SD 1.5 img2img (empty prompt, no guidance, DDIM 50, 512 px, seed 0), SD VAE regeneration, rembg
+  background replacement, TrustMark-RM. ~3 min per photo for all attacks on MPS, so the baselines
+  ran on **30 photos** (`PER_SET=10`: 10 own + 10 ABO + 10 COCO); ours also on all 90.
+- Same 30 photos, + RAV (ours: + RAV (deployed pipeline / ownership = pipeline or informed z ≥ 4)):
+
+| Attack | ΔE of attack | ours v3 | TrustMark Q | WAM | Video Seal |
+|---|---|---|---|---|---|
+| SD VAE regeneration | 3.32 | 26 (27 / 30) | 26 | 22 | **29** |
+| background replaced | 17.77 | **25** (26 / 26) | 7 | 2 | 21 |
+| img2img 0.1 | 4.81 | **16** (16 / 22) | 0 | 0 | 1 |
+| img2img 0.2 | 5.44 | **11** (12 / 17) | 0 | 0 | 0 |
+| img2img 0.3 | 6.12 | **7** (7 / 8) | 0 | 0 | 0 |
+| img2img 0.5 | 8.25 | 0 | 0 | 0 | 0 |
+| TrustMark-RM | 1.34 | **30** (30 / 30) | 2 | 30 | 30 |
+
+  (of 30; blind = +RAV within 1 everywhere — alignment adds nothing against AI attacks)
+- Ours on 90 photos, + RAV (pipeline / ownership): img2img 0.1 49 (59 / 79), 0.2 31 (37 / 53),
+  0.3 17 (17 / 26), 0.5 0 (0 / 0); background 71 (76 / 77); VAE 83 (85 / 90); TrustMark-RM 90 (90 / 90).
+- Ownership via the informed check needs the suspect at the original's size or alignment.
+- Only ours survives light img2img; nothing survives 0.5. TrustMark-RM removes only TrustMark.
+
+### A4 — Video Seal 1.0 as 4th baseline
+- Installs and runs on the Mac (pip `videoseal` 1.0.1 --no-deps, configs from GitHub, `av` stubbed
+  during import). 256 bits, no ECC; detected = ≥ 167/256 bits (binomial p ≤ 1e-6). Default
+  scaling_w 0.2, embed 0.34 s/image. In `src/baselines.py`, test_baselines, A1–A3, B1, B2.
+- `tests/test_baselines.py` (90 photos x 23 = 2,070): **default ΔE 0.22: blind 81.4% [79.7–83.1],
+  + RAV 98.3% [97.7–98.8], 0/90 clean FP**; matched ΔE 0.95: 80.9% / 98.1%.
+  Ours v3: ΔE 1.24, blind 67.6%, + RAV 97.5%, deployed 98.9%.
+- **Video Seal is the best baseline** — better than ours blind and as good with alignment, at ~1/5
+  of our ΔE. Weak on 50% off-centre crop (71/90 vs ours 63/90 — still better) and page screenshot
+  blind (0/90). Where ours wins: self-overwrite (Video Seal 0/40 original at 1x), img2img (1/30 at 0.1).
+
+### B1 — peel-off (`tests/test_peel_off.py 20 20 1000`, victim ours v3, 40 photos)
+- Stage in `DefencePipeline` (`peelers=`): when a decoder (ours, TrustMark, WAM, Video Seal) reads a
+  valid foreign message, regenerate that residual at scales 0.5–4, subtract, read ours again (blind:
+  registered IDs only; aligned: `_verify` with the extra tests counted); 2 rounds for stacked marks.
+  New verdict `watermark_peeled` (+ `peeled`: systems, messages, scale, stage) in app scan + report.
+- Ours on ours, our ID (clean; pipeline before → after):
+
+| Thief × | 1 | 1.5 | 2 | 3 | 4 |
+|---|---|---|---|---|---|
+| blind before → after | 6 → 14 | 2 → **35** | 1 → **35** | 1 → 26 | 0 → 6 |
+| pipeline before → after | 10 → 18 | 2 → **35** | 2 → **37** | 1 → 29 | 1 → 9 |
+
+  JPEG q70: same within 2/40 except 3x 33/40, 4x 15/40 after peeling. Wrong copy 0 everywhere.
+- 1x stays low because the thief's ID is itself unreadable at 1x (8/40, v3 resists overwriting), so
+  there is nothing to peel — the informed check covers that case (40/40).
+- TrustMark / WAM / Video Seal / TrustMark+WAM on top at 1–4x: ours already read 33–40/40 blind
+  before peeling, 39–40/40 after; pipeline 40/40.
+- Two layers of ours on top: 2 → 5/40 (not solved).
+- **False positives: 0/1,167 never-protected images [0–0.33%], 0/320 clean originals carrying only
+  a foreign mark.** Foreign decoders say "present" on never-protected images: TrustMark 28/1,167
+  (2.4%), ours / WAM / Video Seal 0 — peeling those still gave no claim.
+
+### B2 — order proof (`tests/test_order_proof.py 20 20`, 40 photos, 25 decoys, z ≥ 4)
+- `defence.order_proof`: embed the foreign message m on (a) our issued copy and (b) the clean
+  original; t = projection of the suspect onto A − B (t ≈ 1: built on our copy, ≈ 0: on the
+  original), thief strength fitted; z against 25 never-issued decoy copies. In the app
+  (`guard.order_evidence`) for `watermark_peeled` / `watermark_overwritten`, shown in the report.
+- **Positive (thief on our copy): 628/640 = 98.1% [96.8–98.9] "ours first".** Misses: ours 1x 74/80,
+  WAM 2x 74/80. **Null (thief on a leaked clean original): 0/640 [0–0.6%] "ours first", max z 3.62.**
+- Ours 1x: thief's message read only 13–14/40, the proof used the message the thief claims.
+- ~8 s per test (25 decoys, 512 px, CPU).
+
+### B4 — retry rule (`tests/test_retry_rule.py 30`, 90 photos x 23 attacks = 2,070, mirror on)
+- Retry reads (aspect / mirror) accepted blind only with ≤ 4 corrected errors, otherwise
+  "tentative" and accepted only if alignment shows that product (`retry_confirmed`).
+- Full pipeline 2053/2070 = 99.2% with and without the rule (**0.00 pp**); blind 71.7 → 71.3%
+  (8 reads move to alignment: native screenshot 4, marketplace square 2, print 1, social 1).
+- Never-protected 1,167: blind IDs 1 → 0 (the 6-error 16:9 chance hit becomes tentative), pipeline
+  claims 0 → 0. **Kept: `retry_max_errors = 4` on in the app** (library default off).
+
+### App check (separate TRACEMARK_DATA, port 8765, one ABO product)
+- Our copy + ours on top at 2x → `watermark_peeled` (ours, message 500123, scale 1.5, 4 bit errors),
+  order proof t 0.96, z 7.0 → "our copy came first", in the report; 6.1 s.
+- TrustMark on top → `watermark` (0.1 s). Ours 2x on the clean original → `fingerprint_only`, no
+  claim (16.9 s). Unrelated COCO photo → `none`.
+- Fixed: the order proof took the app lock twice and the scan hung (`guard.order_evidence(p=)`).
+
+### B3 — spatial redundancy, 2x2 tiles (`tests/test_tiles.py 30 30 1000`, v3, no training)
+- 60 photos (30 own + 30 ABO) x 23 attacks = 1,380 each. Tiles: PSNR 42.5, ΔE 1.07, ΔE bg 0.53;
+  whole: 41.8 / 1.18 / 0.50.
+- Full pipeline **98.9% [98.2–99.3] tiles vs 98.7% [97.9–99.2] whole**; blind 65.9 vs 68.4%
+  (native screenshot blind 5/60 vs 36/60, screen photo 17 vs 27; alignment recovers all).
+- Overwrite by a whole-image thief with our model file (our ID, full pipeline, of 60):
+  whole copy 17 / 3 / 2 / 1 / 1 at 1/1.5/2/3/4x; **tiled copy 60 / 60 / 60 / 59 / 59**.
+  A thief who also tiles (the code is public): 27 / 7 / 4 / 3 / 2 — no lasting gain.
+- False positives 0/1,000 tiles, 1/1,000 whole (blind ID, no retry rule).
+- **Decision rule failed: 50% off-centre crop 55/60 = 91.7% < 94%** (jpeg_q30, cdn_webp_360 no drop,
+  FP 0) → **not adopted**. The overwrite gain only holds against a thief who doesn't know the
+  tiling.
+
+### Summary of overwrite defences
+`docs/overwrite_defences.md`: pre-check / informed / DCT / v4 / peel-off / order proof / tiles, with
+what each stops, thief strength, false positives, cost.
