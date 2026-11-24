@@ -203,7 +203,27 @@ the informed check is available), A5 (stacked 2×, 3×, iterative peel-off), A6 
 claim, blind reads, and per-defence curves.
 
 ### Deviations
-(none yet)
+Each entry: date, what changed, why, and whether it was decided before or after seeing results.
+1. 2026-11-24, **before any E2 run, after the E1 pilot of ours_v3 / TrustMark / WAM** (instruction of the
+   author, Meeting-3 follow-up): the E2 sample sizes and the interval method change.
+   - E2 positives: **150 photos per victim** (was 300). Null: **>= 1,000 photos per victim** (was
+     >= 1,300). Adaptive attacks A1/A2/A4: 20 photos per victim in a pilot, then 60 per victim in E2.
+   - C2 consequence: with n = 1,000 the Wilson 95 % upper bound is 0.38 % for 0 false claims and ~0.56 %
+     for 1 false claim, so **C2 passes only with 0 false claims** (with n = 1,300, 1 would still pass).
+   - Intervals: Wilson on pooled cells is invalid because the cells of one photo are not independent.
+     C1 / C4 and every pooled rate use the **photo as the unit**: the rate is computed per photo over its
+     cells, the interval is a percentile bootstrap over photos (10,000 resamples, seed 0); the worst
+     cell is reported next to it. Null false-claim rates keep Wilson (one Bernoulli per photo).
+   - C1 point-estimate threshold (>= 90 % per victim) and all other thresholds are unchanged.
+2. 2026-11-24, **before E2**: `peel_ok` counts a blind read of the suspect itself (nothing to remove).
+   This was how the code behaved in the pilot; it is written down here because "restored" is therefore
+   true whenever the victim's own mark survives the thief, with or without the original.
+3. 2026-11-24, **before E2**: sanity controls (wrong original, wrong copy, random / foreign thief message,
+   no thief) and a null pilot (100 photos per victim, thief systems exhaustively) are run before E2.
+   They only test the implementation; a failed control stops the run and the fix is listed here.
+4. 2026-11-24: the E1 Video Seal pilot was restarted once under `scripts/guarded.py`
+   (`caffeinate -dimsu` + restart on 25 min without progress) after the TrustMark pilot lost 5.3 h to a
+   single stalled case. Rows are resumable per photo; nothing in the protocol changed.
 
 ## 5. Real-world benchmark (with the capture protocol)
 

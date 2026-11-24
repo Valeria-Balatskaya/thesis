@@ -269,6 +269,50 @@ class ThiefBank:
         return {"t": t, "z": float((t - null.mean()) / (null.std(ddof=1) + 1e-12)), "scale": a}
 
 
+ROBUST_POSTS = ("id", "jpeg90", "jpeg70", "jpeg50", "blur0.6", "blur1.0")
+
+
+def _post(x: np.ndarray, name: str) -> np.ndarray:
+    """x float32 [0,1] -> the same after a candidate post-processing (the thief's, or the platform's)."""
+    if name == "id":
+        return x
+    if name.startswith("jpeg"):
+        return jpeg(to_u8(x), int(name[4:])).astype(np.float32) / 255
+    import cv2
+    return cv2.GaussianBlur(x, (0, 0), float(name[4:]))
+
+
+def test_robust(bank: "ThiefBank", suspect: np.ndarray, posts: tuple = ROBUST_POSTS, a_grid=(1.0, 1.5, 2.0, 3.0)) -> dict:
+    """
+    Post-processing tolerant order proof (not pre-registered; reported next to the original, A1/A2).
+    For every candidate post-processing P the regenerated candidates are processed the same way before
+    comparing: t_P = <s - P(B), P(A_k) - P(B)> / |P(A_k) - P(B)|^2, with the thief strength re-fitted per P
+    (grid around the least-squares value, minimum |s - P(B)|). z_P is taken against the decoys under the
+    same P; the proof is max_P z_P. The decoys see the same max-over-P procedure only through the null
+    runs (empirical false-claim rate), not analytically.
+    """
+    s = suspect.astype(np.float32) / 255
+    a_ls = float(np.clip(((s - bank.o) * bank.r_o).sum() / (float((bank.r_o * bank.r_o).sum()) + 1e-12), 0.25, 8.0))
+    best = {"z": -1e9}
+    for p in posts:
+        fits = []
+        for g in a_grid:
+            a = min(a_ls * g, 8.0)
+            B = _post(np.clip(bank.o + a * bank.r_o, 0, 1), p)
+            fits.append((float(((s - B) ** 2).sum()), a, B))
+        _, a, B = min(fits, key=lambda f: f[0])
+        sb = s - B
+        ts = []
+        for c, rc in zip(bank.copies, bank.res):
+            d = _post(np.clip(c.astype(np.float32) / 255 + a * rc.astype(np.float32), 0, 1), p) - B
+            ts.append(float((sb * d).sum() / (float((d * d).sum()) + 1e-12)))
+        null = np.array(ts[1:])
+        z = float((ts[0] - null.mean()) / (null.std(ddof=1) + 1e-12))
+        if z > best["z"]:
+            best = {"z": z, "t": ts[0], "scale": a, "post": p}
+    return best
+
+
 @dataclass
 class Evidence:
     informed_z: float
@@ -318,6 +362,23 @@ class Case:
                 self._banks.pop(next(iter(self._banks)))
             self._banks[k] = ThiefBank(thief, self.o, self.copies, msg)
         return self._banks[k]
+
+    def robust_order(self, suspect: np.ndarray, ev: "Evidence", thief_claim: tuple | None = None) -> tuple:
+        """(read_z, claim_z) of the post-processing tolerant order proof for the marks `ev` found / the thief's claim."""
+        cache, rz, cz = {}, None, None
+
+        def one(sy, msg):
+            k = (sy.name, sy.key(msg))
+            if k not in cache:
+                cache[k] = test_robust(self.bank(sy, msg), suspect)["z"]
+            return cache[k]
+
+        for sy, msg in ev.raw_marks:
+            z = one(sy, msg)
+            rz = z if rz is None or z > rz else rz
+        if thief_claim is not None:
+            cz = one(*thief_claim)
+        return rz, cz
 
     def evidence(self, suspect: np.ndarray, thief_claim: tuple | None = None, run_order: bool = True,
                  peel_rounds: int = 2) -> Evidence:
