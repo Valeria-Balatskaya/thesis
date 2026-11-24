@@ -281,7 +281,10 @@ if rw:
         n = int(x["n"])
         lines.append(f"| {x['capture_type']} | {x['model']} | {n} | {pct_ci(int(x['blind']), n) if n else '–'} | "
                      f"{pct_ci(int(x['full']), n) if n else '–'} | {x['wrong']} | {frac_ci(int(x['false_positives']), int(x['n_controls']))} |")
-    write("real_world", "Real captures (not simulated)", "output/real_world/summary.csv", lines)
+    write("real_world_summary", "Real captures (not simulated), raw summary", "output/real_world/summary.csv", lines)
+    import subprocess, sys                         # real_world.md = captures vs their closest simulations
+    subprocess.run([sys.executable, "scripts/real_world_report.py"], check=False, stdout=subprocess.DEVNULL)
+    written.append("real_world")
 else:
     print("skip real world: collect captures (docs/real_world_protocol.md), run tests/test_real_world.py")
 

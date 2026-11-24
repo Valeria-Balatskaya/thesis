@@ -306,6 +306,13 @@ overwrite 0.15, COCO+ABO). v3 as trained (strength 1.0) vs v2 at 0.7/0.3:
 - **B4 retry rule** (test_retry_rule, 2,070 + 1,167): full pipeline 0.00 pp loss, blind false IDs 1 -> 0
   -> `retry_max_errors = 4` **on in the app** (library default None).
 
+## Real-world captures (2026-11-24, output/thesis/real_world.md, `scripts/real_world_report.py`)
+- `data/real_world` labelled with `scripts/label_by_order.py`; v3 at 1.0, 99 captures (20 products x screenshot_100, page_screenshot,
+  phone_photo_front (19), WhatsApp, Telegram) + 50 control scans: full pipeline 97/99 = 98.0% [92.9-99.4], wrong copy 0, FP 0/50.
+- Full pipeline matches the simulations in every type; blind read is lower on real screenshots (5/20 vs native_screenshot 36/60) and
+  phone photos (0/19 vs screen_photo 27/60); the plain `screenshot` simulation was too gentle. Messengers 20/20 blind.
+- Misses: 2 `page_screenshot` (copy 7005 white box on grey, 7012 red pen on white), 0 SIFT inliers -> retrieval fallback idea (roadmap D).
+
 ## Working rules learned the hard way
 - The user runs the app on port 8000 with their own data in `app/data/`. Never delete or
   seed it. Test with `TRACEMARK_DATA=<other folder> uvicorn app.main:app --port 8765`.

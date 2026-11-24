@@ -929,3 +929,23 @@ Clean and JPEG q70 agree within 3/40, clean shown.
 ### Summary of overwrite defences
 `docs/overwrite_defences.md`: pre-check / informed / DCT / v4 / peel-off / order proof / tiles, with
 what each stops, thief strength, false positives, cost.
+
+## Follow-up 3 — real-world captures vs simulations (2026-11-24, v3 at strength 1.0)
+Data: `data/real_world` (git-ignored), 20 products (10 own + 10 ABO) x one capture per type, 10 clean controls per type; labels by
+`scripts/label_by_order.py` (capture order + SIFT check). `tests/test_real_world.py --informed`; tables and comparison:
+`output/thesis/real_world.md` (`python scripts/real_world_report.py`). Wilson 95%; simulation = `tests/test_v3_vs_v2.py`, own + ABO, n = 60.
+- **Full pipeline 97/99 = 98.0% [92.9–99.4]**, wrong copy 0/99, false positives on controls 0/50 (10 distinct pictures x 5 types; upper bound 7.1%).
+- Per type, blind / full: Mac screenshot 100% (`screenshot_100`) 5/20 = 25% [11–47] / 20/20 = 100% [84–100];
+  `page_screenshot` 0/20 / 18/20 = 90% [70–97]; iPhone photo of the screen (`phone_photo_front`) 0/19 / 19/19 = 100% [83–100];
+  WhatsApp 20/20 / 20/20; Telegram 20/20 / 20/20.
+- **Full pipeline matches the simulations in every type** (intervals overlap): native_screenshot 60/60, page_screenshot 58/60 = 96.7%,
+  screen_photo 60/60, perspective 60/60, social_recompress / jpeg_q70 60/60.
+- **Blind read is lower than simulated on two types:** real screenshot 5/20 vs native_screenshot 36/60 = 60% (intervals just apart:
+  upper 46.9 vs lower 47.4) and vs the plain `screenshot` simulation 60/60 (too gentle); phone photo 0/19 vs screen_photo 27/60 = 45%
+  (below; equal to `perspective` 0/60). Alignment recovers all of them (15/20 and 19/19 as `watermark_aligned`).
+- Messenger round trips (WhatsApp Desktop standard, Telegram compressed) read blind 20/20 each, like the simulations.
+- **The 2 misses are both `page_screenshot`, verdict `none`, 0 SIFT inliers:** copy 7005 (own photo: white box on a grey wall, listing 3/30)
+  and copy 7012 (ABO: red pen on white, listing 12/30). Low-detail product shown small: no alignment, blind read fails. Labels verified
+  against the listing HTML (`listing_03.html` -> `v3_06.png`, `listing_12.html` -> `v3_13.png`). Both were traced in all four other types.
+- Limits: one device and one session; the 20 products and 10 controls repeat across types (types are not independent); angled phone
+  photos, Instagram and print were not captured.
