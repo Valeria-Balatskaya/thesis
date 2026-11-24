@@ -89,6 +89,30 @@ class OursSystem(System):
     def key(self, msg): return str(int(msg))
 
 
+class ClosedSystem(System):
+    """
+    A thief's PRIVATE watermarking model (A3): any checkpoint of ours, optionally with another key.
+    The defender has no decoder and no embedder for it, so it is never in `systems`.
+    """
+
+    def __init__(self, checkpoint: str, label: str, key_seed: int | None = None):
+        from src.defence import OursPeeler
+        from src.hidden_v2_inference import HiddenV2Model
+        self.model = HiddenV2Model(checkpoint)
+        key = self.model.other_key(key_seed) if (key_seed is not None and self.model.key_dim) else None
+        self.peeler = OursPeeler(self.model, key=key)
+        self.name = label
+
+    def message(self, i): return i
+    def thief_message(self, i): return 700_000 + i
+    def residual(self, rgb, msg, level=1.0):
+        return self.peeler.residual(rgb, msg, None if level == 1.0 else level)
+    def foreign_read(self, rgb): return None
+    def read_ok(self, rgb, i): return False
+    def same(self, a, b): return a == b
+    def key(self, msg): return str(msg)
+
+
 class _BitSystem(System):
     """TrustMark / WAM / Video Seal: messages come from the baseline, decisions are its native ones."""
     def __init__(self, base):
@@ -149,13 +173,17 @@ class InformedBank:
         refs /= np.linalg.norm(refs, axis=1, keepdims=True) + 1e-12
         self.refs = refs
 
-    def test(self, suspect: np.ndarray) -> dict:
+    def scores(self, suspect: np.ndarray) -> np.ndarray:
+        """Correlation of the suspect's change with every copy in the bank."""
         d = np.clip(suspect.astype(np.float32) - self.o, -self.clip, self.clip).reshape(-1)
         d -= d.mean()
         nd = float(np.linalg.norm(d))
-        if nd < 1e-9:
+        return np.zeros(len(self.refs), dtype=np.float32) if nd < 1e-9 else self.refs @ d / nd
+
+    def test(self, suspect: np.ndarray) -> dict:
+        sc = self.scores(suspect)
+        if not sc.any():
             return {"z": 0.0, "score": 0.0}
-        sc = self.refs @ d / nd
         null = sc[1:]
         return {"z": float((sc[0] - null.mean()) / (null.std(ddof=1) + 1e-12)), "score": float(sc[0])}
 
@@ -222,7 +250,8 @@ class ThiefBank:
         self.copies = copies
         self.res = [thief.residual(c, msg).astype(np.float16) for c in copies]
 
-    def test(self, suspect: np.ndarray) -> dict:
+    def ts(self, suspect: np.ndarray) -> tuple:
+        """t for every copy in the bank (index 0 first) and the fitted thief strength."""
         s = suspect.astype(np.float32) / 255
         denom = float((self.r_o * self.r_o).sum()) + 1e-12
         a = float(np.clip(((s - self.o) * self.r_o).sum() / denom, 0.25, 8.0))   # thief strength (fitted)
@@ -232,6 +261,10 @@ class ThiefBank:
         for c, rc in zip(self.copies, self.res):
             d = np.clip(c.astype(np.float32) / 255 + a * rc.astype(np.float32), 0, 1) - B
             ts.append(float((sb * d).sum() / (float((d * d).sum()) + 1e-12)))
+        return ts, a
+
+    def test(self, suspect: np.ndarray) -> dict:
+        ts, a = self.ts(suspect)
         t, null = ts[0], np.array(ts[1:])
         return {"t": t, "z": float((t - null.mean()) / (null.std(ddof=1) + 1e-12)), "scale": a}
 
@@ -286,11 +319,12 @@ class Case:
             self._banks[k] = ThiefBank(thief, self.o, self.copies, msg)
         return self._banks[k]
 
-    def evidence(self, suspect: np.ndarray, thief_claim: tuple | None = None, run_order: bool = True) -> Evidence:
+    def evidence(self, suspect: np.ndarray, thief_claim: tuple | None = None, run_order: bool = True,
+                 peel_rounds: int = 2) -> Evidence:
         """thief_claim = (System, message) the thief discloses (used for the 'claim' variant)."""
         inf = self.informed_bank.test(suspect)
         marks = find_marks(suspect, self.systems, self.victim, self.i)
-        pl = peel(suspect, self.victim, self.i, self.systems, marks=marks)
+        pl = peel(suspect, self.victim, self.i, self.systems, marks=marks, rounds=peel_rounds)
         rz = rt = None
         scale = None
         if run_order:

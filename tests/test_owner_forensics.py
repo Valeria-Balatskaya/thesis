@@ -46,7 +46,6 @@ end = min(end, len(manifest))
 systems = [of.load_system(n) for n in of.SYSTEMS]
 victim = of.load_system(VICTIM)
 thieves = [of.load_system(n) for n in THIEVES]
-by_name = {s.name: s for s in systems}
 
 FIELDS = ["victim", "set", "source", "image", "kind", "thief", "level", "post", "dE_O", "blind", "informed_z",
           "informed", "peel_ok", "peel_only", "peel_scale", "marks", "thief_read", "order_read_z", "order_read_t",
@@ -148,9 +147,9 @@ if SET == "e2null":
         print(f"  {c}: {frac_ci(sum(int(r[c]) for r in rows), len(rows))} cases")
 else:
     print("kind thief level post: n | blind | informed | peel | order(read) | order(claim) | restored | thief dE")
-    for T in THIEVES:
+    for T in [t.name for t in thieves]:
         for lv in LEVELS:
-            sub = [r for r in rows if r["thief"] == T and float(r["level"]) == lv]
+            sub = [r for r in rows if r["thief"] == T and r["level"] and float(r["level"]) == lv]
             if not sub:
                 continue
             k = lambda c: sum(int(r[c]) for r in sub)
