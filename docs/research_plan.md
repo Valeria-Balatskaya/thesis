@@ -37,6 +37,16 @@ then **attack it adaptively**.
 > Read the full PDFs before citing them, and check nothing newer appeared. Search alerts:
 > "re-watermarking defense", "watermark ownership dispute image", "watermark embedding order".
 
+> **Update 2026-11-24 (full texts read, `docs/related_work_check.md`).** The gap sentence above is too
+> strong. Training-time defences exist: Senthuran et al. (ICLR 2026, self-re-watermarking, white-box,
+> own models) and Jia et al. (arXiv 2508.17247, face forensics). Bulychev et al. already show that the
+> attacker's message is readable after re-marking (hijack, bit accuracy 0.99 on WAM and Video Seal), so
+> contribution 1 is an extension (TrustMark, product photos, thief ΔE, strength sweep, with intervals).
+> The claim that survives: **no post-hoc, owner-side, system-agnostic forensic protocol for deployed
+> open watermarks, and no embedding-order test for blind neural watermarks, was found.** Resolving a
+> dispute with the original and a timestamp is classical (Craver et al. 1997/1998). The venue note on
+> Nemecek et al. ("CVPR Workshops, best paper") is not in the PDF; cite it as arXiv.
+
 ## 2. The claim
 
 **Blind watermarks cannot prove ownership once open watermarking models exist: anyone can re-mark
@@ -135,6 +145,65 @@ message) on a clean machine. It must give the same result, which proves reproduc
 | False claims | 95% Wilson upper bound ≤ 0.5% on ≥ 1,000 null cases |
 | Wrong copy (E3) | 0 |
 | A4 | report the ΔE at which the claim is lost, so the thief must visibly damage the image to win |
+
+## 4b. Pre-registered protocol and success criteria (frozen 2026-11-24, before any E1 run)
+
+Written before any generalised defence was run. Only embed timings were measured (0.07 / 0.08 / 0.21 /
+0.13 s per residual at 1024 px for ours / TrustMark / WAM / Video Seal). Anything changed after the
+first pilot result goes into the **Deviations** list at the end of this section, with the reason.
+
+### Systems and settings
+- Victim V and thief T each ∈ {ours v3 (`hidden_v3_best.pt`, strength 1.0), TrustMark Q (WM_STRENGTH 1),
+  WAM (scaling_w 2.0), Video Seal 1.0 (scaling_w 0.2)} = default strengths of `tests/test_baselines.py`.
+- Owner message m_V(i) = `V.message(i)` / ours copy ID 1000 + i. Thief message from another seed.
+- Thief strength 1 / 1.5 / 2 / 3 × the thief system's default; post-processing clean / JPEG q70.
+  Thief ΔE (CIEDE2000 mean, `src.metrics.visibility`) is measured on the thief output **before**
+  post-processing, against the clean original.
+- Suspect = thief(C_V) for the positives; no geometry in E1/E2 (alignment is already evaluated);
+  A1 adds resize / crop / screenshot with the existing retrieve-align step.
+
+### Data (all disjoint)
+- Pilot: 40 photos (20 own + 20 ABO) = the A1/B1/B2 set, used for debugging and calibration only.
+- E2 positives: 300 photos not in the pilot: the remaining own photos (27) + held-out ABO + held-out
+  COCO test2017 (from `data_manifests/*_eval.csv`, never seen in v3 training).
+- E2 null: ≥ 1,300 distinct further photos (1,000 `data/abo_negatives` + held-out ABO / COCO).
+  **Correction to section 3:** 0 false claims in 1,000 cases gives a Wilson upper bound of 0.38 %, not
+  0.3 %. 0.3 % needs ≥ 1,300 independent cases (0/1,300 → 0.29 %).
+
+### Defences (all generic over V; ours reproduces the legacy code path as a regression check)
+1. **Blind:** V's own decoder reads m_V(i) exactly (`V.read_rgb(...).ok`), no defence.
+2. **Informed:** z = standardised correlation of clip(S − O) with V's exact residual r_V(O, m_V), against
+   **D = 50** residuals of never-issued messages of V on the same O. Claim iff z ≥ 4.
+3. **Peel-off:** every foreign message read by any of the four public decoders (≠ m_V) is regenerated
+   with its own system, the residuals are subtracted at scales {0.5, 1, 1.5, 2, 3, 4}, 2 rounds, then V
+   reads blind again. Claim iff V's read is `ok` for the candidate product.
+4. **Order proof:** thief message m_T from the public decoders (secondary run: m_T supplied by the
+   thief); t = ⟨s − B, A − B⟩/|A − B|², A = T(C_V, m_T), B = T(O, m_T), thief strength fitted; z against
+   **D = 50** copies of V with never-issued messages. Claim "owner first" iff z ≥ 4.
+5. **Owner claim (primary)** = informed ∨ peel-off ∨ order proof. **L2 claim** = order proof only
+   (only when m_T is readable).
+
+### Null cases (the claim must NOT be made)
+For each null photo O_j the owner "registered" (O_j, C_j = V(O_j, m_V(j))) but C_j was **never**
+published. Null cases per photo: (a) the thief marks the leaked clean original O_j with a randomly drawn
+(T, strength ∈ {1, 1.5, 2, 3}, post) (this is attack A7), (b) the clean O_j / JPEG q70 of O_j. A photo
+counts as a false claim if **any** of its cases fires any defence. Unit = photo (n ≥ 1,300 per V).
+
+### Pass / fail criteria
+| ID | Criterion | Pass if |
+|---|---|---|
+| C1 | Owner claim (primary) restored on positives with thief ΔE ≤ 2.0, per victim system, pooled over thief systems / strengths / posts | point estimate ≥ 90 % for **each** of the 4 victims (Wilson lower bound and worst thief cell reported; no cell is dropped) |
+| C2 | False claims, union of the defences, null photos | Wilson 95 % upper bound ≤ 0.5 % per victim (≤ 1 false claim in 1,300); per-defence rates, max null z and the empirical-vs-nominal calibration reported |
+| C3 | E3, wrong copy: 5 issued copies per product, thief re-marks one; the copy with the highest informed z ≥ 4 is named | 0 wrong copies; correct-copy rate reported |
+| C4 | A4 (estimated-original attack) | Thief win rate (our claim fails while the thief's message is read) ≤ 10 % at thief ΔE ≤ 2 for each victim; report the ΔE at which the win rate reaches 50 % and any false claim (any false claim = failure) |
+| C5 | E4, third-party reproduction | 100 % of 20 saved bundles give the same decisions in a fresh process / fresh virtualenv, max \|Δz\| ≤ 0.05 (same hardware: stated limitation) |
+
+Reported without a threshold: A1 (post-processing), A2 (unknown strength), A3 (closed watermark: only
+the informed check is available), A5 (stacked 2×, 3×, iterative peel-off), A6 (fake original), the L2
+claim, blind reads, and per-defence curves.
+
+### Deviations
+(none yet)
 
 ## 5. Real-world benchmark (with the capture protocol)
 
