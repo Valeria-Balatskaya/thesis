@@ -1,9 +1,16 @@
 # tests/test_owner_checks.py
 # Checks that run BEFORE E2 (docs/research_plan.md section 4b, deviation 3).
 #
-# MODE=sanity  10 pilot photos per victim. Two real suspects per photo (S = T(C) with T = the victim's own
-#              system at 1x = the hardest cell, and T = the next system at 2x), then one broken input at a
-#              time. Each control lists the defences that CONSUME the broken input; none of them may fire.
+# MODE=sanity  10 pilot photos per victim. Three kinds of real suspect S = T(C), then one broken input at a time:
+#                hard      T = the victim's own system at the lowest of 2x / 3x / 4x where blind, informed and
+#                          peel-off all FAIL on the true inputs (the order proof is the only defence that can
+#                          still work, so a firing under a broken input cannot be explained by anything else)
+#                own_easy  same, when no such strength exists for the photo (the owner's mark survives)
+#                cross     T = the next system at 2x (the owner's mark mostly survives)
+#              Each control lists the defences that CONSUME the broken input. Pass = none of them fires on
+#              the "hard" base, and wrong_original / wrong_copy / no_thief on every base. On own_easy / cross
+#              the claim-variant order proof (random_message / foreign_system) may fire because the owner's
+#              residual really is in S (informed fires too); that is reported as informational.
 #                wrong_original   the owner's case is built on another photo's original (resized)
 #                                   consumes: informed, order_read, order_claim   (peel-off never uses O)
 #                wrong_copy       the claim is for another issued copy of the same photo (message i + 1000)
@@ -56,7 +63,7 @@ if MODE == "sanity":
 else:
     sample = list(range(N))
 
-FIELDS = ["mode", "victim", "image", "case", "thief", "level", "post", "blind", "informed_z", "informed", "peel_ok",
+FIELDS = ["mode", "victim", "image", "base", "case", "thief", "level", "post", "blind", "informed_z", "informed", "peel_ok",
           "peel_only", "marks", "thief_read", "order_read_z", "order_read", "order_claim_z", "order_claim", "secs"]
 done = set()
 if os.path.exists(ROWS):
@@ -83,14 +90,14 @@ def other(T):
     return of.load_system(of.SYSTEMS[(of.SYSTEMS.index(REG[T.name]) + 1) % len(of.SYSTEMS)])
 
 
-def log(case_name, idx, case, S, T, level, post, claim, secs=0.0):
+def log(case_name, idx, case, S, T, level, post, claim, secs=0.0, base=""):
     ev = case.evidence(S, thief_claim=claim)
     tr = ""
     if T is not None:
         m_t = T.thief_message(idx)
         tr = int(any(s.name == T.name and T.same(m, m_t) for s, m in ev.raw_marks))
     f = lambda v: "" if v is None else round(v, 2)
-    w.writerow({"mode": MODE, "victim": VICTIM, "image": idx, "case": case_name, "thief": T.name if T else "none",
+    w.writerow({"mode": MODE, "victim": VICTIM, "image": idx, "base": base, "case": case_name, "thief": T.name if T else "none",
                 "level": level if T else "", "post": post, "blind": int(victim.read_ok(S, case.i)),
                 "informed_z": f(ev.informed_z), "informed": int(ev.informed), "peel_ok": int(ev.peel_ok),
                 "peel_only": int(ev.peel_ok and not ev.peel_blind), "marks": ";".join(f"{a}" for a, _ in ev.marks),
@@ -107,7 +114,16 @@ for n_done, idx in enumerate(sample, 1):
         wrong_O = fit(load((int(idx) + 7) % len(manifest)), O.shape)
         wrong_O_case = of.Case(victim, idx, wrong_O, systems)
         wrong_copy_case = of.Case(victim, idx + 1000, O, systems)
-        for T, lv in ((victim, 1.0), (other(victim), 2.0)):
+        bases, hard = [], False
+        for lv in (2.0, 3.0, 4.0):                           # lowest strength where only the order proof is left
+            m0 = victim.thief_message(idx)
+            ev0 = true_case.evidence(victim.mark(true_case.copy, m0, lv), thief_claim=(victim, m0), run_order=False)
+            hard = not (ev0.informed or ev0.peel_ok)
+            if hard:
+                break
+        bases.append(("hard" if hard else "own_easy", victim, lv))
+        bases.append(("cross", other(victim), 2.0))
+        for base, T, lv in bases:
             m_t = T.thief_message(idx)
             S = T.mark(true_case.copy, m_t, lv)
             T2 = other(T)
@@ -117,15 +133,13 @@ for n_done, idx in enumerate(sample, 1):
                         ("wrong_copy", wrong_copy_case, S, (T, m_t)),
                         ("random_message", true_case, S, (T, rand_msg)),
                         ("foreign_system", true_case, S, foreign),
-                        ("no_thief", true_case, true_case.copy, (T, m_t))]
+                        ("no_thief", true_case, true_case.copy, (T, m_t)),
+                        ("true_inputs", true_case, S, (T, m_t))]          # reference: the same suspect, true inputs
             for name, case, susp, claim in controls:
                 if (idx, name, T.name, str(lv), "clean") in done:
                     continue
                 tt = time.time()
-                log(name, idx, case, susp, T, lv, "clean", claim, secs=time.time() - tt)
-            # the real thing, for reference: same suspect with the true inputs
-            if (idx, "true_inputs", T.name, str(lv), "clean") not in done:
-                log("true_inputs", idx, true_case, S, T, lv, "clean", (T, m_t))
+                log(name, idx, case, susp, T, lv, "clean", claim, secs=time.time() - tt, base=base)
         fh.flush()
     else:
         plan = []
@@ -162,18 +176,21 @@ if MODE == "sanity":
     CONSUMED = {"wrong_original": ("informed", "order_read", "order_claim"),
                 "wrong_copy": ("blind", "informed", "peel_ok", "order_read", "order_claim"),
                 "random_message": ("order_claim",), "foreign_system": ("order_claim",), "no_thief": ("order_read",)}
+    ALWAYS = ("wrong_original", "wrong_copy", "no_thief")                # also binding on the easy bases
     bad = 0
-    print(f"{'control':<16}{'n':<4}" + "".join(f"{d:<12}" for d in DEF) + "  consumed-defence firings")
-    for c in ("true_inputs", *CONSUMED):
-        sub = [r for r in rows if r["case"] == c]
-        if not sub:
-            continue
-        fired = {d: sum(int(r[d] or 0) for r in sub) for d in DEF}
-        n_bad = sum(fired[d] for d in CONSUMED.get(c, ()))
-        bad += n_bad
-        print(f"{c:<16}{len(sub):<4}" + "".join(f"{fired[d]:<12}" for d in DEF) +
-              (f"  {n_bad}  {'FAIL' if n_bad else 'ok'}" if c in CONSUMED else "  (reference)"))
-    print("SANITY FAIL: a consumed defence fired" if bad else "SANITY OK: no consumed defence fired")
+    print(f"{'base':<10}{'control':<16}{'n':<4}" + "".join(f"{d:<12}" for d in DEF) + "  consumed-defence firings")
+    for base in ("hard", "own_easy", "cross"):
+        for c in ("true_inputs", *CONSUMED):
+            sub = [r for r in rows if r["case"] == c and r["base"] == base]
+            if not sub:
+                continue
+            fired = {d: sum(int(r[d] or 0) for r in sub) for d in DEF}
+            n_bad = sum(fired[d] for d in CONSUMED.get(c, ()))
+            binding = c in ALWAYS or base == "hard"
+            bad += n_bad if (c in CONSUMED and binding) else 0
+            tag = "(reference)" if c not in CONSUMED else (f"{n_bad}  {'FAIL' if n_bad and binding else ('informational' if n_bad else 'ok')}")
+            print(f"{base:<10}{c:<16}{len(sub):<4}" + "".join(f"{fired[d]:<12}" for d in DEF) + f"  {tag}")
+    print("SANITY FAIL: a consumed defence fired on a binding control" if bad else "SANITY OK: no binding control fired")
 else:
     photos = {}
     for r in rows:

@@ -22,7 +22,8 @@
 # A7 (thief marks a leaked clean original) is the null of tests/test_owner_forensics.py.
 #
 # Order proof is reported twice: as pre-registered ("order") and post-processing tolerant ("rob", A1/A2 only;
-# src.owner_forensics.test_robust, NOT pre-registered). Rows carry every defence separately.
+# src.owner_forensics.test_robust, NOT pre-registered; computed only when informed and peel-off both failed,
+# blank otherwise). Rows carry every defence separately.
 #
 # Run: ATTACK=a1 VICTIM=ours_v3 OFFSET=0 python tests/test_owner_adaptive.py [n_photos]   (default 20)
 #      pilot = OFFSET 0, 20 photos; E2 = OFFSET 20, 60 photos (disjoint). LEVELS=1,2  THIEVES=... restrict.
@@ -148,7 +149,8 @@ def run(case, idx, meta, T, variant, level, post, S0, m_t, claim=True, run_order
         ev = case.evidence(S, thief_claim=claim_obj, run_order=run_order)
     finally:
         case.systems = systems
-    rob = case.robust_order(S, ev, claim_obj) if (robust and run_order) else (None, None)
+    # tolerant order proof only where the order proof decides (informed and peel-off both failed); blank elsewhere
+    rob = case.robust_order(S, ev, claim_obj) if (robust and run_order and not (ev.informed or ev.peel_ok)) else (None, None)
     log(case, idx, meta, T, variant, level, post, S, ev, dE, m_t, True, time.time() - t, rob=rob, defender=defender)
 
 

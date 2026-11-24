@@ -296,7 +296,7 @@ def test_robust(bank: "ThiefBank", suspect: np.ndarray, posts: tuple = ROBUST_PO
     best = {"z": -1e9}
     for p in posts:
         fits = []
-        for g in a_grid:
+        for g in ((1.0,) if p == "id" else a_grid):      # "id" is exactly the plain proof, so the max is never below it
             a = min(a_ls * g, 8.0)
             B = _post(np.clip(bank.o + a * bank.r_o, 0, 1), p)
             fits.append((float(((s - B) ** 2).sum()), a, B))
