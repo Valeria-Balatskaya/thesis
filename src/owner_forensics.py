@@ -237,6 +237,7 @@ def peel(suspect: np.ndarray, victim: System, i: int, systems: list, marks: list
 # ─── 3. order proof ───────────────────────────────────────────────
 
 ORDER_Z = 4.0
+PRESENCE_K = 24       # decoy thief messages for the presence test (deviation 5)
 
 
 class ThiefBank:
@@ -327,6 +328,10 @@ class Evidence:
     order_claim_z: float | None
     order_claim_t: float | None
     order_scale: float | None
+    order_read_raw_z: float | None = None     # order proof alone (before the presence gate)
+    order_claim_raw_z: float | None = None
+    presence_read_z: float | None = None      # thief-presence / message-specificity z of the best mark
+    presence_claim_z: float | None = None
 
     @property
     def order_read(self) -> bool:
@@ -354,6 +359,7 @@ class Case:
         self.copies = [self.copy] + [victim.mark(original, victim.decoy_message(k)) for k in range(n_decoys)]
         self.informed_bank = InformedBank(original, self.copies)
         self._banks: dict = {}
+        self._pres_key, self._pres = None, None
 
     def bank(self, thief: System, msg) -> ThiefBank:
         k = (thief.name, thief.key(msg))
@@ -363,14 +369,37 @@ class Case:
             self._banks[k] = ThiefBank(thief, self.o, self.copies, msg)
         return self._banks[k]
 
+    def presence(self, thief: System, msg, suspect: np.ndarray) -> float:
+        """
+        Thief presence and message specificity (deviation 5). a(m) = <S - C, w_C(m)> / |w_C(m)|^2 with
+        w_C(m) = T(C, m) - C: how strongly the claimed thief residual explains what changed from the owner's
+        published copy C. z = (a(claimed) - mean a(decoy)) / sd a(decoy) over PRESENCE_K never-used messages of
+        the same system. ~0 when nothing was added to C (S = C) or the message is wrong; large when T(., m)
+        was applied. Needs only C, S and T (the owner holds C).
+        """
+        if self._pres_key != thief.name:
+            c = self.copy.astype(np.float32) / 255
+            self._pres = (c, [thief.residual(self.copy, thief.decoy_message(k)).astype(np.float16) for k in range(PRESENCE_K)])
+            self._pres_key = thief.name
+        c, dec = self._pres
+        d = suspect.astype(np.float32) / 255 - c
+
+        def a(r):
+            r = r.astype(np.float32)
+            return float((d * r).sum() / (float((r * r).sum()) + 1e-12))
+
+        null = np.array([a(r) for r in dec])
+        return float((a(thief.residual(self.copy, msg)) - null.mean()) / (null.std(ddof=1) + 1e-9))
+
     def robust_order(self, suspect: np.ndarray, ev: "Evidence", thief_claim: tuple | None = None) -> tuple:
-        """(read_z, claim_z) of the post-processing tolerant order proof for the marks `ev` found / the thief's claim."""
+        """(read_z, claim_z) of the post-processing tolerant order proof for the marks `ev` found / the thief's claim;
+        min(order z, presence z) as in `evidence`."""
         cache, rz, cz = {}, None, None
 
         def one(sy, msg):
             k = (sy.name, sy.key(msg))
             if k not in cache:
-                cache[k] = test_robust(self.bank(sy, msg), suspect)["z"]
+                cache[k] = min(test_robust(self.bank(sy, msg), suspect)["z"], self.presence(sy, msg, suspect))
             return cache[k]
 
         for sy, msg in ev.raw_marks:
@@ -381,25 +410,33 @@ class Case:
         return rz, cz
 
     def evidence(self, suspect: np.ndarray, thief_claim: tuple | None = None, run_order: bool = True,
-                 peel_rounds: int = 2) -> Evidence:
-        """thief_claim = (System, message) the thief discloses (used for the 'claim' variant)."""
+                 peel_rounds: int = 2, presence_gate: bool = True) -> Evidence:
+        """
+        thief_claim = (System, message) the thief discloses (used for the 'claim' variant).
+        presence_gate: the order proof fires only if the thief's residual is also present and message-specific
+        (min of the two z values; deviation 5). False = the pre-registered proof alone (E1 pilot).
+        """
         inf = self.informed_bank.test(suspect)
         marks = find_marks(suspect, self.systems, self.victim, self.i)
         pl = peel(suspect, self.victim, self.i, self.systems, marks=marks, rounds=peel_rounds)
-        rz = rt = None
+        rz = rt = rraw = rpres = None
         scale = None
         if run_order:
             for s, msg in marks:
                 r = self.bank(s, msg).test(suspect)
-                if rz is None or r["z"] > rz:
-                    rz, rt, scale = r["z"], r["t"], r["scale"]
-        cz = ct = None
+                pz = self.presence(s, msg, suspect)
+                zc = min(r["z"], pz) if presence_gate else r["z"]
+                if rz is None or zc > rz:
+                    rz, rt, scale, rraw, rpres = zc, r["t"], r["scale"], r["z"], pz
+        cz = ct = craw = cpres = None
         if run_order and thief_claim is not None:
             r = self.bank(*thief_claim).test(suspect)
-            cz, ct = r["z"], r["t"]
+            cpres = self.presence(thief_claim[0], thief_claim[1], suspect)
+            cz, ct, craw = (min(r["z"], cpres) if presence_gate else r["z"]), r["t"], r["z"]
             scale = scale if scale is not None else r["scale"]
         return Evidence(informed_z=inf["z"], informed=inf["z"] >= Z_THRESHOLD, peel_ok=pl["ok"],
                         peel_blind=pl["blind"], peel_scale=pl["scale"],
                         marks=[(s.name, s.key(m)) for s, m in marks], raw_marks=marks,
                         order_read_z=rz, order_read_t=rt, order_claim_z=cz, order_claim_t=ct,
-                        order_scale=scale)
+                        order_scale=scale, order_read_raw_z=rraw, order_claim_raw_z=craw,
+                        presence_read_z=rpres, presence_claim_z=cpres)

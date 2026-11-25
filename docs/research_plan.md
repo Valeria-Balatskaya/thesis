@@ -224,6 +224,22 @@ Each entry: date, what changed, why, and whether it was decided before or after 
 4. 2026-11-24: the E1 Video Seal pilot was restarted once under `scripts/guarded.py`
    (`caffeinate -dimsu` + restart on 25 min without progress) after the TrustMark pilot lost 5.3 h to a
    single stalled case. Rows are resumable per photo; nothing in the protocol changed.
+5. 2026-11-25, **before E2, after seeing the first sanity run** (`output/owner_forensics/sanity_v1/`): the order
+   proof gets a **thief-presence / message-specificity gate**. Sanity v1 failed on three of four victims:
+   (a) claim variant with a random or foreign thief message still gave z >= 4 (TrustMark 2/10, Video Seal 6/10
+   and 1/10 on the hard base) and with no thief at all z was 7-25 for every system; (b) one TrustMark decoder
+   false read on a clean copy let the read variant fire (ours_v3, 1 photo). Cause: t = <S-B, A-B>/|A-B|^2
+   is about 1 whenever the owner's residual is in S, whatever the thief did, so the proof cannot show that
+   the thief's residual is present or that the message is right.
+   - Gate: a(m) = <S-C, T(C,m)-C> / |T(C,m)-C|^2 (the owner holds C); z_pres = (a(claimed) - mean a(decoy)) /
+     sd a(decoy) over **24** never-used messages of the same system. The order proof reports
+     **min(z_order, z_pres)**; it fires iff both >= 4. Prototype (10 photos x 4 systems x 1x/2x, clean and
+     JPEG q70): true message z_pres 6.0-33.8, random message <= 2.3, S = C exactly 0, thief on the leaked
+     original (A7) 4.2-15.5 (the gate lets it through; the order test says "thief first").
+   - Pilot E1 results above were computed WITHOUT the gate (`presence_gate=False` reproduces them). Pilot
+     positives are not recomputed; E2 and everything after use the gate; the recall cost is measured in E2.
+   - The sanity run is repeated from scratch; the null pilot and adaptive pilot start only if all four say
+     SANITY OK. The gate can only remove claims, never add them, so C2 (false claims) cannot get worse.
 
 ## 5. Real-world benchmark (with the capture protocol)
 

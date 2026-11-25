@@ -64,7 +64,8 @@ else:
     sample = list(range(N))
 
 FIELDS = ["mode", "victim", "image", "base", "case", "thief", "level", "post", "blind", "informed_z", "informed", "peel_ok",
-          "peel_only", "marks", "thief_read", "order_read_z", "order_read", "order_claim_z", "order_claim", "secs"]
+          "peel_only", "marks", "thief_read", "order_read_z", "order_read", "order_claim_z", "order_claim", "order_read_raw_z", "order_claim_raw_z",
+          "presence_read_z", "presence_claim_z", "secs"]
 done = set()
 if os.path.exists(ROWS):
     done = {(int(r["image"]), r["case"], r["thief"], r["level"], r["post"]) for r in csv.DictReader(open(ROWS))}
@@ -102,7 +103,9 @@ def log(case_name, idx, case, S, T, level, post, claim, secs=0.0, base=""):
                 "informed_z": f(ev.informed_z), "informed": int(ev.informed), "peel_ok": int(ev.peel_ok),
                 "peel_only": int(ev.peel_ok and not ev.peel_blind), "marks": ";".join(f"{a}" for a, _ in ev.marks),
                 "thief_read": tr, "order_read_z": f(ev.order_read_z), "order_read": int(ev.order_read),
-                "order_claim_z": f(ev.order_claim_z), "order_claim": int(ev.order_claim), "secs": round(secs, 1)})
+                "order_claim_z": f(ev.order_claim_z), "order_claim": int(ev.order_claim),
+                "order_read_raw_z": f(ev.order_read_raw_z), "order_claim_raw_z": f(ev.order_claim_raw_z),
+                "presence_read_z": f(ev.presence_read_z), "presence_claim_z": f(ev.presence_claim_z), "secs": round(secs, 1)})
 
 
 t0 = time.time()
